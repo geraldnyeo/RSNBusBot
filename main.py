@@ -846,7 +846,7 @@ ptb = (
 async def lifespan(app: FastAPI):
     """This code only runs once, before the application starts up and starts receiving requests."""
     # TODO PRIORITY: May have to edit this - it fails but the code still runs...?
-    await ptb.bot.setWebhook(url="https://shuttlebusbot.onrender.com/webhook",
+    await ptb.bot.setWebhook(url="https://rsnbusbot.onrender.com/webhook",
                             certificate=None) # https://core.telegram.org/bots/self-signed
     # info = await ptb.bot.get_webhook_info()
     # print(info)
