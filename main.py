@@ -32,12 +32,13 @@ from functools import wraps
 import os
 
 ### CONSTANTS
-# Production
+# Environment Variables
 TOKEN = os.environ['TOKEN']
 BOT_USERNAME = os.environ['BOT_USERNAME']
 TIMEZONE = os.environ['TIMEZONE']
-MAX_RIDERS = 40
+DEFAULT_MAX_RIDERS = 40
 
+# Messages
 START_MSG = """Welcome to Shuttle Bus Bot! Please send /start directly to the bot to enable recieving of tokens. \
 Use /settings to edit the default settings."""
 VIEW_SETTINGS_MSG = """Here are the current settings for the bot:"""
@@ -78,6 +79,7 @@ def group(func):
     """
     Decorator for commands which can only be run in a group chat, not private chat.
     """
+    # TODO: Debug - apparently group / private =/= group chat / DM
     @wraps(func)
     async def wrapped(update, context, *args, **kwargs):
         if update.effective_chat.type == "group":
@@ -92,6 +94,7 @@ def private(func):
     """
     Decorator for commands which can only be run in a private chat, not group chat.
     """
+    # TODO: Debug (see above)
     @wraps(func)
     async def wrapped(update, context, *args, **kwargs):
         if update.effective_chat.type == "private":
@@ -107,6 +110,7 @@ def restricted(func):
     Defines decorator which marks commands as restricted.
     Restricted commands can only be run by the group admins.
     """
+    # TODO: Debug along with above decorators
     @wraps(func)
     async def wrapped(update, context, *args, **kwargs):
         chat_admins = await update.effective_chat.get_administrators()
@@ -119,10 +123,9 @@ def restricted(func):
     
     return wrapped
 
-# Invalid response catcher for all conversations
+# Invalid response catcher
 async def invalid(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Invalid response catcher."""
-
+    """Invalid response catcher for all ConversationHandlers"""
     chat_id = update.effective_chat.id
     await context.bot.send_message(
         chat_id = chat_id,
@@ -131,6 +134,7 @@ async def invalid(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 ### COMMANDS
+## GENERAL / SETTINGS
 # @group
 # @restricted
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -139,7 +143,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
      - Auto Messaging
      - Setup Constants
     """
-
+    # TODO: Setup constants conversation handler
     chat_id = update.effective_chat.id
 
     await context.bot.send_message(
@@ -158,12 +162,12 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     days=(0, 1, 2, 3, 4, 5, 6),
                                     chat_id=chat_id)
 
-        # Initialise some data for the bot to save
+        # Initialise the data structure which the bot will be using.
         payload = {
-            update.effective_chat.id: {
+            update.effective_chat.id: { # TODO: Swap to using chat_data rather than bot_data
                 "settings": {
                     "CHAT": "service",
-                    "MAX RIDERS": MAX_RIDERS,
+                    "MAX RIDERS": DEFAULT_MAX_RIDERS,
                     "PICKUP": "",
                     "DESTINATION": "",
                 },
@@ -175,8 +179,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         context.bot_data.update(payload)
         print(context.bot_data)
-    
-    # print(context.job_queue.jobs())
 
 # @group
 # @restricted
@@ -195,8 +197,7 @@ async def view_settings_command(update: Update, context: ContextTypes.DEFAULT_TY
         text = text
     )
 
-
-SELECT, CHAT, RIDERS, PICKUP, DESTINATION = range(5)
+SELECT, CHAT, RIDERS, PICKUP, DESTINATION = range(5) # states for settings conversation handler
 
 # @group
 # @restricted
@@ -220,12 +221,12 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SELECT
 
 async def settings_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Sends messages once a setting to change is selected."""
+    """Sends prompt messages once a setting to change is selected."""
 
     # Get the chat data
     chat_id = update.effective_chat.id
 
-    # Redirect user
+    # Redirect user to correct state
     selection = update.message.text
     match selection:
         case "Chat Type":
@@ -260,7 +261,7 @@ async def settings_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return DESTINATION
         
 async def settings_update(update: Update, context: ContextTypes.DEFAULT_TYPE, setting, value):
-    """General code for updating settings."""
+    """Update settings and prompts user to select another setting."""
 
     # Get chat data
     chat_id = update.effective_chat.id
@@ -332,46 +333,37 @@ settings_handler = ConversationHandler(
 # @group
 # @restricted
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Inform the user about the bot's available commands (group chat)."""
+    """Inform the user about the bot's available commands."""
 
     await update.message.reply_text(HELP_MSG) # TODO: Update list of commands
 
-@private
-async def private_help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Inform the user about the bot's available commands (private chat)."""
-
-    await update.message.reply_text(PRIVATE_HELP_MSG) # TODO FUTURE
-
-async def get_text(pickup, destination):
-    date = datetime.today() + timedelta(1)
-    date = date.strftime("%d %b %y")
-    booking_text = f"Registration of {pickup} to {destination} Shuttle Bus slots for {date}."
-    return booking_text
-
+## REGISTRATION
 async def registration_message(context: ContextTypes.DEFAULT_TYPE, chat_id, message_id=None, close=False):
-    """Re-creates menu for registration."""
+    """Creates / Re-creates menu for registration."""
+
     chat_data = context.bot_data[chat_id]
     pickup, destination = chat_data["settings"]["PICKUP"], chat_data["settings"]["DESTINATION"]
 
     # Prepare the text message
-    text = await get_text(pickup, destination) # update the date
+    date = datetime.today() + timedelta(1)
+    date = date.strftime("%d %b %y")
+    text = f"Registration of {pickup} to {destination} Shuttle Bus slots for {date}."
     
     if message_id:
         users = context.bot_data[chat_id]['users']
         text = f"{text}\n\nPlaces Reserved:"
-        for u in users: # add each username to the list
+        for u in users:
             text += f"\n{u['username']}"
     
-    # Create the menu
-    buttons = [
-        [InlineKeyboardButton("Book", callback_data="book"),
-         InlineKeyboardButton("Cancel", callback_data="cancel")],
-    ]
-    reply_markup = InlineKeyboardMarkup(buttons)
-    if close:
-        reply_markup = None
-
     # Send the message
+    reply_markup = None
+    if not close:
+        buttons = [
+            [InlineKeyboardButton("Book", callback_data="book"),
+            InlineKeyboardButton("Cancel", callback_data="cancel")],
+        ]
+        reply_markup = InlineKeyboardMarkup(buttons)
+    
     if message_id:
         message = await context.bot.edit_message_text(
             chat_id = chat_id,
@@ -391,7 +383,7 @@ async def registration_message(context: ContextTypes.DEFAULT_TYPE, chat_id, mess
 # @group
 # @restricted
 async def book_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Sends a message to book shuttle bus slots for a day."""
+    """Sends a message to book shuttle bus slots."""
 
     chat_id = update.effective_chat.id
     chat_data = context.bot_data[chat_id]
@@ -399,6 +391,7 @@ async def book_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Send the registration message
     message = await registration_message(context, chat_id)
 
+    # Update data
     chat_data["message_id"] = message.message_id
     chat_data["bookings"] = 0
     chat_data["users"] = []
@@ -409,11 +402,11 @@ async def book_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print(context.bot_data)
 
 async def daily_booking(context: ContextTypes.DEFAULT_TYPE):
-    """Handles daily booking."""
+    """Initiates / cancels daily booking for special cases."""
 
     chat_id = context.job.chat_id
     chat_data = context.bot_data[chat_id]
-    dt = datetime.today() + timedelta(1) # Next day
+    dt = datetime.today() + timedelta(1)
 
     # Check for any overwrites
     date = dt.strftime("%d %b %y")
@@ -421,6 +414,7 @@ async def daily_booking(context: ContextTypes.DEFAULT_TYPE):
     if date in overwrites:
         flag = overwrites[date]
         
+        # Remove overwrite once it has been triggered
         del overwrites[date]
         chat_data["overwrite"] = overwrites
         payload = {
@@ -429,6 +423,7 @@ async def daily_booking(context: ContextTypes.DEFAULT_TYPE):
         context.bot_data.update(payload)
         print(context.bot_data)
 
+        # Sends appropriate message
         if flag:
             await book_job(context)
         else:
@@ -439,8 +434,7 @@ async def daily_booking(context: ContextTypes.DEFAULT_TYPE):
 
             return
 
-    # Check if message should be sent
-    # If weekend, don't send
+    # Don't send message on weekends
     day = dt.weekday()
     if day == 5 or day == 6: # Don't send if the next day is Sat or Sun
         return
@@ -453,8 +447,10 @@ async def book_job(context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.job.chat_id
     chat_data = context.bot_data[chat_id]
     
+    # Send registration message
     message = await registration_message(context, chat_id)
 
+    # Update data
     chat_data["message_id"] = message.message_id
     chat_data["bookings"] = 0
     chat_data["users"] = []
@@ -468,16 +464,19 @@ async def book_job(context: ContextTypes.DEFAULT_TYPE):
 # @restricted
 async def close_book_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Close registration for the current day. New riders will not be registered. Data will still be stored.
+    Close registration for the current day. 
+    New riders will not be registered. 
+    List of registered users will still be stored.
     """
     chat_id = update.effective_chat.id
     chat_data = context.bot_data[chat_id]
 
+    # Exit if no registration to close
     if chat_data["message_id"] == None:
         print("Close command failed as booking not open.")
         return
 
-    # Remove reply_markup so users cannot reply
+    # Remove reply_markup so users cannot register
     await registration_message(context, 
                                chat_id, 
                                message_id=chat_data['message_id'],
@@ -494,10 +493,15 @@ async def reopen_book_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     """
     Reopen registration for the current day. New riders can continue being registered.
     """
-    if context.bot_data[update.effective_chat.id]["message_id"] == None:
+    chat_id = update.effective_chat.id
+    chat_data = context.bot_data[chat_id]
+
+    # Exit if no registration to open
+    if chat_data["message_id"] == None:
         print("Reopen command failed as booking not open.")
         return
 
+    # Add back reply_markup so users can register
     await registration_message(context, 
                                update.effective_chat.id,
                                message_id=context.bot_data[update.effective_chat.id]['message_id']
@@ -511,10 +515,10 @@ async def reopen_book_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 # @restricted
 async def end_book_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Ends registration"""
-
     chat_id = update.effective_chat.id
     chat_data = context.bot_data[chat_id]
 
+    # Exit if no registration to end
     if chat_data["message_id"] == None:
         print("End command failed as booking not open.")
         return
@@ -552,6 +556,7 @@ async def end_book_job(context: ContextTypes.DEFAULT_TYPE):
     chat_id = context.job.chat_id
     chat_data = context.bot_data[chat_id]
 
+    # Exit if no registration to end
     if chat_data["message_id"] == None:
         print("Close command failed as booking not open.")
         return
@@ -592,7 +597,10 @@ async def cancel_book_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = update.effective_chat.id
     chat_data = context.bot_data[chat_id]
     
-    if chat_data["message_id"] == None: # TODO: Replace this clause with call of booking cancellation for a range
+    if chat_data["message_id"] == None: # Cancel automatic registration for the next day
+        # TODO: Replace this clause with call of booking cancellation for a range
+
+        # Update overwrite data
         date = datetime.today() + timedelta(1)
         date = date.strftime("%d %b %y")
         chat_data["overwrite"][date] = False
@@ -602,11 +610,13 @@ async def cancel_book_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.bot_data.update(payload)
         print(context.bot_data)
 
+        # Notif Message
         await context.bot.send_message(
             chat_id = chat_id,
             text = f"Booking cancelled for {date}" # TODO: Generalize
         )
-    else:
+    else: # Cancel registration for the current day
+        # Exit if no registration to cancel
         if chat_data["message_id"] == None:
             print("Booking reset failed as booking not open.")
             return
@@ -642,15 +652,17 @@ async def uncancel_book_command(update: Update, context: ContextTypes.DEFAULT_TY
     chat_id = update.effective_chat.id
     chat_data = context.bot_data[chat_id]
 
+    # Update overwrite data
     dt = datetime.today() + timedelta(1)
     date = dt.strftime("%d %b %y")
-    chat_data["overwrite"][date] = True
+    chat_data["overwrite"][date]
     payload = {
         chat_id: chat_data
     }
     context.bot_data.update(payload)
     print(context.bot_data)
 
+    # Notif Message
     await context.bot.send_message(
         chat_id = chat_id,
         text = f"Booking uncancelled for {date}" # TODO: Generalize
@@ -671,7 +683,7 @@ async def booking_cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     }
     users = chat_data['users']
 
-    if "book" in query:
+    if "book" in query: # "Book" button clicked
         # Check if max users have been reached
         if len(users) == chat_data["settings"]["MAX RIDERS"]:
             print(f"Registration failed as maximum number of riders have registered.")
@@ -680,7 +692,7 @@ async def booking_cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if user in users:
             print(f"Registration failed as user attempted to register twice.")
             return
-        
+
         users.append(user)
 
         # Update bot data
@@ -692,11 +704,11 @@ async def booking_cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.bot_data.update(payload)
         print(context.bot_data) # Important for debugging
 
-        # If MAX RIDERS, send a notification message
+        # Notif message for MAX RIDERS reached
         if len(users) >= chat_data["settings"]["MAX RIDERS"]:
             await update.callback_query.message.reply_text(MAX_RIDERS_NOTIF_MSG)
 
-    if "cancel" in query:
+    if "cancel" in query: # "Cancel" button clicked
         # Check if user has already booked
         if user not in users:
             print(f"Registration cancellation failed as user has not registered before.")
@@ -723,7 +735,8 @@ async def booking_cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                                message_id = chat_data['message_id']
                                )
 
-CONFIRM, SENT = range(6, 8)
+## BROADCAST / NOTIFICATION
+CONFIRM, SENT = range(6, 8) # States for broadcast conversation handler
 
 # @group
 # @restricted
@@ -744,6 +757,7 @@ async def broadcast_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     message = update.message.text
     text = f'"{message}"\n\n{BROADCAST_CONFIRM_MSG}'
+
     buttons = [
         [KeyboardButton("Yes"),
          KeyboardButton("No")]
@@ -755,6 +769,7 @@ async def broadcast_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = reply_markup
     )
 
+    # Save the message the user wants to broadcast
     context.user_data["broadcast"] = message
     print(context.user_data)
 
@@ -765,12 +780,15 @@ async def broadcast_sent(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     chat_id = update.effective_chat.id
     message = update.message.text
+
     if message == "Yes":
+        # Notif Message
         await context.bot.send_message(
             chat_id = chat_id,
             text = BROADCAST_SENT_MSG
         )
 
+        # Send message to every service chat
         for chat in context.bot_data.keys():
             if context.bot_data[chat]["settings"]["CHAT"] == "service":
                 await context.bot.send_message(
@@ -781,7 +799,8 @@ async def broadcast_sent(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del context.user_data["broadcast"]
 
         return ConversationHandler.END
-    else:
+    
+    else: # if message = "No"
         await context.bot.send_message(
             chat_id = chat_id,
             text = BROADCAST_PROMPT_MSG
@@ -829,12 +848,19 @@ async def notify_late(update: Update, context: ContextTypes.DEFAULT_TYPE, all_ch
 
 
 async def error(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Catches any error and prints it to the command line for debugging."""
     print(f'Update:\n {update}\n caused error:\n {context.error}')
 
 
 ### MAIN
-print('Starting bot...')
+"""
+There are two applications running:
+ - The Python Telegram Bot application, which handles receiving, processing and sending Telegram updates.
+ - The FastAPI application, which sets up the webhook endpoint for Telegram to send updates to.
+"""
+print('Starting bot...') # Logging
 
+# Create the PTB application
 ptb = (
     Application.builder()
     .token(TOKEN)
@@ -845,31 +871,34 @@ ptb = (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """This code only runs once, before the application starts up and starts receiving requests."""
-    # TODO PRIORITY: May have to edit this - it fails but the code still runs...?
+
     await ptb.bot.setWebhook(url="https://rsnbusbot.onrender.com/webhook",
-                            certificate=None) # https://core.telegram.org/bots/self-signed
-    # info = await ptb.bot.get_webhook_info()
-    # print(info)
+                            certificate=None) # Sets up webhook
+    
+    # Allows ptb and fastapi applications to run together
     async with ptb:
         await ptb.start()
         yield
         await ptb.stop()
 
-# Do not run FastAPI code for local dev using polling
-app = FastAPI(lifespan=lifespan)
+# Create the FastAPI application
+app = FastAPI(lifespan=lifespan) # Do not run FastAPI code for local dev using polling
 
 @app.get("/")
 async def index():
+    """Landing page for the bot."""
     # TODO FUTURE: Add a basic single static page here to explain the bot!
     return "Hello"
 
 @app.post("/webhook")
 async def process_update(request: Request):
+    """Updates PTB application when post request received at webhook"""
     req = await request.json()
     update = Update.de_json(req, ptb.bot)
     await ptb.process_update(update)
     return Response(status_code = HTTPStatus.OK)
 
+# Set up PTB handlers
 # Commands (General)
 ptb.add_handler(CommandHandler('start', start_command))
 ptb.add_handler(CommandHandler('view_settings', view_settings_command))
