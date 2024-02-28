@@ -25,17 +25,19 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from http import HTTPStatus
 
+import os
 from datetime import datetime, timedelta, time
 import pytz
 from functools import wraps
 
-import os
+import sqlite3
 
 ### CONSTANTS
 # Environment Variables
 TOKEN = os.environ['TOKEN']
 BOT_USERNAME = os.environ['BOT_USERNAME']
 TIMEZONE = os.environ['TIMEZONE']
+DB_FILEPATH = os.environ['DB_FILEPATH']
 DEFAULT_MAX_RIDERS = 40
 
 # Messages
@@ -72,6 +74,14 @@ BROADCAST_CONFIRM_MSG = """Please confirm that this is the message you want to b
 BROADCAST_SENT_MSG = """Message has been broadcasted!"""
 BROADCAST_CANCEL_MSG = """Broadcasting has been cancelled!"""
 NOTIFY_LATE_MSG = """Dear all, the bus at 0700hrs will be late. Please inform your respective units of the delay and to seek their understanding. Thank you"""
+
+
+### DATABASE
+con = sqlite3.connect(f"{DB_FILEPATH}/test.db")
+cur = con.cursor()
+cur.execute("CREATE TABLE movie(title, year, score)")
+res = cur.execute("SELECT name FROM sqlite_master")
+print(res.fetchone())
 
 
 ### HELPER FUNCTIONS
@@ -904,7 +914,6 @@ ptb.add_handler(CommandHandler('start', start_command))
 ptb.add_handler(CommandHandler('view_settings', view_settings_command))
 ptb.add_handler(settings_handler)
 ptb.add_handler(CommandHandler('help', help_command))
-ptb.add_handler(CommandHandler('_help', private_help_command)) # TODO: Add a wrapper function to redirect between help or private_help
 
 # Commands (Booking)
 ptb.add_handler(CommandHandler('book', book_command))
