@@ -1,5 +1,5 @@
 """
-RSNBusBot v0.1.0
+RSNBusBot v1.0.0
 """
 
 ### IMPORTS
@@ -25,17 +25,20 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from http import HTTPStatus
 
+import os
 from datetime import datetime, timedelta, time
 import pytz
 from functools import wraps
 
-import os
+import sqlite3
+
 
 ### CONSTANTS
 # Environment Variables
 TOKEN = os.environ['TOKEN']
 BOT_USERNAME = os.environ['BOT_USERNAME']
 TIMEZONE = os.environ['TIMEZONE']
+DB_FILEPATH = os.environ['DB_FILEPATH']
 DEFAULT_MAX_RIDERS = 40
 
 # Messages
@@ -72,6 +75,11 @@ BROADCAST_CONFIRM_MSG = """Please confirm that this is the message you want to b
 BROADCAST_SENT_MSG = """Message has been broadcasted!"""
 BROADCAST_CANCEL_MSG = """Broadcasting has been cancelled!"""
 NOTIFY_LATE_MSG = """Dear all, the bus at 0700hrs will be late. Please inform your respective units of the delay and to seek their understanding. Thank you"""
+
+
+### DATABASE
+con = sqlite3.connect(f"{DB_FILEPATH}/rsnbusbot.db") 
+cur = con.cursor()
 
 
 ### HELPER FUNCTIONS
@@ -152,7 +160,18 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = ReplyKeyboardRemove() # Remove any unwanted keyboards on start
     ) # TODO: If group, introduce. If private, something else.
 
-    if update.effective_chat.id not in context.bot_data: # Only initialize if not yet intialized
+    # Check if chat has been initialized
+    res = cur.execute(f"SELECT EXISTS (SELECT 1 FROM settings WHERE chat_id={chat_id})")
+    exists = res.fetchone()
+    exists = exists[0]
+
+    if not exists: # Only initialize settings if not yet intialized
+        # Update database
+        cur.execute(f"INSERT INTO settings VALUES \
+                    ({chat_id}, 'service', {DEFAULT_MAX_RIDERS}, '', '')")
+        con.commit()
+
+    if chat_id not in context.bot_data.keys():
         context.job_queue.run_daily(daily_booking,
                                     time=time(hour=17, minute=30, second=0, tzinfo=pytz.timezone(TIMEZONE)), 
                                     days=(0, 1, 2, 3, 4, 5, 6), # MUST be 0 to 6 or it won't work
@@ -162,15 +181,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     days=(0, 1, 2, 3, 4, 5, 6),
                                     chat_id=chat_id)
 
-        # Initialise the data structure which the bot will be using.
+        # Initialise the message data structure which the bot will be using.
         payload = {
-            update.effective_chat.id: { # TODO: Swap to using chat_data rather than bot_data
-                "settings": {
-                    "CHAT": "service",
-                    "MAX RIDERS": DEFAULT_MAX_RIDERS,
-                    "PICKUP": "",
-                    "DESTINATION": "",
-                },
+            chat_id: { # TODO: Swap to using chat_data rather than bot_data
+                "initialized": False,
                 "message_id": None,
                 "bookings": 0,
                 "users": [],
@@ -188,9 +202,18 @@ async def view_settings_command(update: Update, context: ContextTypes.DEFAULT_TY
     """
     chat_id = update.effective_chat.id
 
+    # Get database data
+    res = cur.execute(f"SELECT chat_type, max_riders, pickup, destination \
+                      FROM settings WHERE chat_id={chat_id}")
+    data = res.fetchone()
+    if data is None:
+        print("Unable to retrieve data from database.")
+        return
+
     text = VIEW_SETTINGS_MSG
-    for key, value in context.bot_data[chat_id]["settings"].items():
-        text = f"{text}\n{key}: {value}"
+    settings = ["Chat Type", "Max Riders", "Pickup", "Destination"]
+    for i in range(len(settings)):
+        text = f"{text}\n{settings[i]}: {data[i]}"
     
     await context.bot.send_message(
         chat_id = chat_id,
@@ -265,42 +288,42 @@ async def settings_update(update: Update, context: ContextTypes.DEFAULT_TYPE, se
 
     # Get chat data
     chat_id = update.effective_chat.id
-    chat_data = context.bot_data[chat_id]
 
-    chat_data["settings"][setting] = value
+    if type(value) == str: # add quotes to denote string in SQL
+        value = f"'{value}'"
+
+    cur.execute(f"UPDATE settings SET \
+                {setting}={value} \
+                WHERE chat_id={chat_id}")
+    con.commit()
+    
     await context.bot.send_message(
         chat_id = chat_id,
         text = UPDATED_SETTINGS_MSG
     )
 
-    payload = {
-        chat_id: chat_data
-    }
-    context.bot_data.update(payload)
-    print(context.bot_data) # Important for debugging
-
 async def settings_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Settings for chat type"""
 
-    await settings_update(update, context, "CHAT", update.message.text)
+    await settings_update(update, context, "chat_type", update.message.text)
     return SELECT
 
 async def settings_riders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Settings for max riders"""
 
-    await settings_update(update, context, "MAX RIDERS", int(update.message.text))
+    await settings_update(update, context, "max_riders", int(update.message.text))
     return SELECT
 
 async def settings_pickup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Settings for pickup"""
 
-    await settings_update(update, context, "PICKUP", update.message.text)
+    await settings_update(update, context, "pickup", update.message.text)
     return SELECT
 
 async def settings_destination(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Settings for destination"""
 
-    await settings_update(update, context, "DESTINATION", update.message.text)
+    await settings_update(update, context, "destination", update.message.text)
     return SELECT
 
 async def cancel_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -341,8 +364,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def registration_message(context: ContextTypes.DEFAULT_TYPE, chat_id, message_id=None, close=False):
     """Creates / Re-creates menu for registration."""
 
+    res = cur.execute(f"SELECT pickup, destination FROM settings WHERE chat_id={chat_id}")
+    data = res.fetchone()
+    pickup, destination = data[0], data[1]
+
     chat_data = context.bot_data[chat_id]
-    pickup, destination = chat_data["settings"]["PICKUP"], chat_data["settings"]["DESTINATION"]
 
     # Prepare the text message
     date = datetime.today() + timedelta(1)
@@ -350,7 +376,7 @@ async def registration_message(context: ContextTypes.DEFAULT_TYPE, chat_id, mess
     text = f"Registration of {pickup} to {destination} Shuttle Bus slots for {date}."
     
     if message_id:
-        users = context.bot_data[chat_id]['users']
+        users = chat_data['users']
         text = f"{text}\n\nPlaces Reserved:"
         for u in users:
             text += f"\n{u['username']}"
@@ -537,9 +563,13 @@ async def end_book_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Send tokens
     date = datetime.today() + timedelta(1)
     date = date.strftime("%d %b %y")
+    res = cur.execute(f"SELECT pickup, destination \
+                      FROM settings WHERE chat_id={chat_id}")
+    data = res.fetchone()
+    pickup, destination = data[0], data[1]
+
     booking_token = f"Your registration for the shuttle bus from \
-{chat_data['settings']['PICKUP']} to {chat_data['settings']['DESTINATION']} \
-for {date} has been confirmed."
+{pickup} to {destination} for {date} has been confirmed."
     for user in chat_data["users"]:
         try:
             await context.bot.send_message(
@@ -575,9 +605,13 @@ async def end_book_job(context: ContextTypes.DEFAULT_TYPE):
     # Send tokens
     date = datetime.today() + timedelta(1)
     date = date.strftime("%d %b %y")
+    res = cur.execute(f"SELECT pickup, destination \
+                      FROM settings WHERE chat_id={chat_id}")
+    data = res.fetchone()
+    pickup, destination = data[0], data[1]
+
     booking_token = f"Your registration for the shuttle bus from \
-{chat_data['settings']['PICKUP']} to {chat_data['settings']['DESTINATION']} \
-for {date} has been confirmed."
+{pickup} to {destination} for {date} has been confirmed."
     for user in chat_data["users"]:
         try:
             await context.bot.send_message(
@@ -675,6 +709,11 @@ async def booking_cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query.data
     chat_id = update.effective_chat.id
     chat_data = context.bot_data[chat_id]
+
+    res = cur.execute(f"SELECT max_riders \
+                      FROM settings WHERE chat_id={chat_id}")
+    data = res.fetchone()
+    max_riders = data[0]
     
     # Get user information
     user = {
@@ -685,7 +724,7 @@ async def booking_cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if "book" in query: # "Book" button clicked
         # Check if max users have been reached
-        if len(users) == chat_data["settings"]["MAX RIDERS"]:
+        if len(users) == max_riders:
             print(f"Registration failed as maximum number of riders have registered.")
             return
         # Check if user has already booked
@@ -705,7 +744,7 @@ async def booking_cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         print(context.bot_data) # Important for debugging
 
         # Notif message for MAX RIDERS reached
-        if len(users) >= chat_data["settings"]["MAX RIDERS"]:
+        if len(users) >= max_riders:
             await update.callback_query.message.reply_text(MAX_RIDERS_NOTIF_MSG)
 
     if "cancel" in query: # "Cancel" button clicked
@@ -726,7 +765,7 @@ async def booking_cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         print(context.bot_data) # Important for debugging
 
         # If new spaces open up, send a notification message
-        if len(users) == chat_data["settings"]["MAX RIDERS"] - 1:
+        if len(users) == max_riders - 1:
             await update.callback_query.message.reply_text(OPEN_SPACES_NOTIF_MSG)
 
     # Edit the message to show list of users
@@ -788,11 +827,14 @@ async def broadcast_sent(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text = BROADCAST_SENT_MSG
         )
 
+        res = cur.execute("SELECT chat_id, chat_type FROM settings")
+        data = res.fetchall()
+
         # Send message to every service chat
-        for chat in context.bot_data.keys():
-            if context.bot_data[chat]["settings"]["CHAT"] == "service":
+        for chat in data:
+            if chat[1] == "service":
                 await context.bot.send_message(
-                    chat_id = chat,
+                    chat_id = chat[0],
                     text = context.user_data["broadcast"]
                 )
 
@@ -858,6 +900,19 @@ There are two applications running:
  - The Python Telegram Bot application, which handles receiving, processing and sending Telegram updates.
  - The FastAPI application, which sets up the webhook endpoint for Telegram to send updates to.
 """
+print('Setting up...') # Logging
+
+# Prepare the database
+res = cur.execute("CREATE TABLE IF NOT EXISTS settings (\
+                  chat_id INTEGER PRIMARY KEY, \
+                  chat_type TEXT NOT NULL, \
+                  max_riders INTEGER NOT NULL, \
+                  pickup TEXT NOT NULL, \
+                  destination TEXT NOT NULL\
+                  )") # Create settings table
+
+# TODO: Decide on a data structure for user_data table
+
 print('Starting bot...') # Logging
 
 # Create the PTB application
@@ -904,7 +959,6 @@ ptb.add_handler(CommandHandler('start', start_command))
 ptb.add_handler(CommandHandler('view_settings', view_settings_command))
 ptb.add_handler(settings_handler)
 ptb.add_handler(CommandHandler('help', help_command))
-ptb.add_handler(CommandHandler('_help', private_help_command)) # TODO: Add a wrapper function to redirect between help or private_help
 
 # Commands (Booking)
 ptb.add_handler(CommandHandler('book', book_command))
@@ -928,5 +982,5 @@ ptb.add_error_handler(error)
 
 # Polling, for dev purposes
 # print('Polling...')
-# ptb.run_polling(poll_interval=3, allowed_updates=Update.ALL_TYPES)
+# ptb.run_polling(poll_interval=1, allowed_updates=Update.ALL_TYPES)
     
