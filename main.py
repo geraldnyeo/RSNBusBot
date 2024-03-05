@@ -22,7 +22,8 @@ from telegram.ext import (
 )
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
+from http import HTTPStatus
 
 import os
 from datetime import datetime, timedelta, time
@@ -353,6 +354,7 @@ async def settings_destination(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def cancel_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancels and ends the conversation"""
+    # TODO: Make this generalized
     chat_id = update.effective_chat.id
 
     # Send message
@@ -974,7 +976,7 @@ manage_book_handler = ConversationHandler(
         FUNCTION: [MessageHandler(filters.Regex(r"^(Close|Reopen|End|Cancel)$"), manage_function),
                    MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
     },
-    fallbacks = [CommandHandler("cancel", cancel_settings)]
+    fallbacks = [CommandHandler("cancel", cancel_settings)] 
 )
 
 ## BROADCAST / NOTIFICATION
@@ -1199,21 +1201,21 @@ async def lifespan(app: FastAPI):
         await ptb.stop()
 
 # Create the FastAPI application
-# app = FastAPI(lifespan=lifespan) # Do not run FastAPI code for local dev using polling
+app = FastAPI(lifespan=lifespan) # Do not run FastAPI code for local dev using polling
 
-# @app.get("/")
-# async def index():
-#     """Landing page for the bot."""
-#     # TODO FUTURE: Add a basic single static page here to explain the bot!
-#     return "Hello"
+@app.get("/")
+async def index():
+    """Landing page for the bot."""
+    # TODO FUTURE: Add a basic single static page here to explain the bot!
+    return "Hello"
 
-# @app.post("/webhook")
-# async def process_update(request: Request):
-#     """Updates PTB application when post request received at webhook"""
-#     req = await request.json()
-#     update = Update.de_json(req, ptb.bot)
-#     await ptb.process_update(update)
-#     return Response(status_code = HTTPStatus.OK)
+@app.post("/webhook")
+async def process_update(request: Request):
+    """Updates PTB application when post request received at webhook"""
+    req = await request.json()
+    update = Update.de_json(req, ptb.bot)
+    await ptb.process_update(update)
+    return Response(status_code = HTTPStatus.OK)
 
 # Set up PTB handlers
 # Commands (General)
@@ -1244,6 +1246,6 @@ ptb.add_handler(CommandHandler('view_data_summary', view_data_summary_command))
 ptb.add_error_handler(error)
 
 # Polling, for dev purposes
-print('Polling...')
-ptb.run_polling(poll_interval=1, allowed_updates=Update.ALL_TYPES)
+# print('Polling...')
+# ptb.run_polling(poll_interval=1, allowed_updates=Update.ALL_TYPES)
     
