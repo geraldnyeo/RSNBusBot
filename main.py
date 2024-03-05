@@ -22,8 +22,7 @@ from telegram.ext import (
 )
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, Response
-from http import HTTPStatus
+from fastapi import FastAPI
 
 import os
 from datetime import datetime, timedelta, time
@@ -42,7 +41,7 @@ DB_FILEPATH = os.environ['DB_FILEPATH']
 DEFAULT_MAX_RIDERS = 40
 
 # Messages
-START_MSG = """Welcome to Shuttle Bus Bot! Please send /start directly to the bot to enable recieving of tokens. \
+START_MSG = """Welcome to RSN Bus Bot! Please send /start directly to the bot to enable recieving of tokens. \
 Use /settings to edit the default settings."""
 VIEW_SETTINGS_MSG = """Here are the current settings for the bot:"""
 SETTINGS_MSG = """Select a setting to edit, or /cancel to stop editing.
@@ -58,12 +57,29 @@ UPDATED_SETTINGS_MSG = """Settings updated! Select another setting to continue e
 CANCELLED_SETTINGS_MSG = """Settings cancelled."""
 INVALID_RESPONSE_MSG = """Invalid response."""
 HELP_MSG = """Here are a list of currently available commands:
-/start - Starts the bot, and initialises the daily registration.
-/help - Displays a list of help functions.
-/book - Manually starts registration for the next day."""
-PRIVATE_HELP_MSG = """Private chat functionality is currently unavailable. Look forward to our future updates!"""
+/start - Introduce the bot; initialize daily registration.
+/view_settings - Shows a list of current bot settings.
+/settings - Edit bot settings.
+/help - List of bot commands.
+/book - Manually open registration.
+/manage - Manage bookings. Allows admin to close, reopen, end and cancel bookings.
+/cancel_book - Cancels automatic booking for the next day.
+/uncancel_book - Enables automatic booking for the next day.
+/broadcast - Broadcast a custom message to all service chats.
+/notify_late - Send notification message to chat informing users that bus will be late.
+/notify_late_all - Broadcast notification message to all service chats informing users that buses will be late.
+/view_data_summary - Send message summarizing ridership statistics across all services.
+/cancel - Cancels any conversation.
+"""
 MAX_RIDERS_NOTIF_MSG = """The maximum number of riders have been registered. Please find alternative means of transport, or check again later."""
 OPEN_SPACES_NOTIF_MSG = """New spaces have opened up for shuttle bus registration!"""
+MANAGE_MSG = "Enter booking ID of registration to edit: "
+MANAGE_FUNCTIONS_MSG = """Select a function to use, or /cancel to stop editing.
+Close
+Reopen
+End
+Cancel"""
+INVALID_BOOK_ID_MSG = "Invalid booking ID. Please try again: "
 CLOSE_NOTIF_MSG = """Registration has been closed by the admin."""
 REOPEN_NOTIF_MSG = """Registration has been reopened by the admin."""
 END_NOTIF_MSG = """Registration has ended."""
@@ -148,51 +164,57 @@ async def invalid(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Introduce the bot to users, and initialises various processes:
+     - Database Configuration
      - Auto Messaging
-     - Setup Constants
+     - Setup Ephermeral Data 
     """
-    # TODO: Setup constants conversation handler
     chat_id = update.effective_chat.id
 
-    await context.bot.send_message(
-        chat_id = chat_id,
-        text = START_MSG,
-        reply_markup = ReplyKeyboardRemove() # Remove any unwanted keyboards on start
-    ) # TODO: If group, introduce. If private, something else.
-
-    # Check if chat has been initialized
+    # Add new row for chat into database if required
+    # Check if chat has been initialized for settings table
     res = cur.execute(f"SELECT EXISTS (SELECT 1 FROM settings WHERE chat_id={chat_id})")
     exists = res.fetchone()
     exists = exists[0]
 
-    if not exists: # Only initialize settings if not yet intialized
-        # Update database
+    # Initialize settings
+    if not exists: 
         cur.execute(f"INSERT INTO settings VALUES \
                     ({chat_id}, 'service', {DEFAULT_MAX_RIDERS}, '', '')")
         con.commit()
 
+    # Setup automatic processes and chat_data
     if chat_id not in context.bot_data.keys():
+        # Automatic processes
         context.job_queue.run_daily(daily_booking,
                                     time=time(hour=17, minute=30, second=0, tzinfo=pytz.timezone(TIMEZONE)), 
                                     days=(0, 1, 2, 3, 4, 5, 6), # MUST be 0 to 6 or it won't work
                                     chat_id=chat_id) # Sends booking every day
         context.job_queue.run_daily(end_book_job,
                                     time=time(hour=23, minute=59, second=59, tzinfo=pytz.timezone(TIMEZONE)),
-                                    days=(0, 1, 2, 3, 4, 5, 6),
-                                    chat_id=chat_id)
+                                    days=(0, 1, 2, 3, 4, 5, 6), 
+                                    chat_id=chat_id) #Ends all bookings
+        
+        # print(context.job_queue.jobs())
 
         # Initialise the message data structure which the bot will be using.
         payload = {
             chat_id: { # TODO: Swap to using chat_data rather than bot_data
                 "initialized": False,
-                "message_id": None,
-                "bookings": 0,
-                "users": [],
+                "bookings": {},
                 "overwrite": {}
             }
         }
         context.bot_data.update(payload)
         print(context.bot_data)
+
+    # Send introduction message
+    await context.bot.send_message(
+        chat_id = chat_id,
+        text = START_MSG,
+        reply_markup = ReplyKeyboardRemove() # Remove any unwanted keyboards on start
+    ) # TODO: If group, introduce. If private, something else.
+
+    # TODO: Setup constants conversation handler
 
 # @group
 # @restricted
@@ -210,11 +232,13 @@ async def view_settings_command(update: Update, context: ContextTypes.DEFAULT_TY
         print("Unable to retrieve data from database.")
         return
 
+    # Prepare message
     text = VIEW_SETTINGS_MSG
     settings = ["Chat Type", "Max Riders", "Pickup", "Destination"]
     for i in range(len(settings)):
         text = f"{text}\n{settings[i]}: {data[i]}"
     
+    # Send message
     await context.bot.send_message(
         chat_id = chat_id,
         text = text
@@ -228,6 +252,7 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Settings Menu
     """
+    # Send nessage
     buttons = [
         [KeyboardButton("Pickup Location"),
          KeyboardButton("Destination")],
@@ -245,8 +270,6 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def settings_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Sends prompt messages once a setting to change is selected."""
-
-    # Get the chat data
     chat_id = update.effective_chat.id
 
     # Redirect user to correct state
@@ -284,11 +307,18 @@ async def settings_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return DESTINATION
         
 async def settings_update(update: Update, context: ContextTypes.DEFAULT_TYPE, setting, value):
-    """Update settings and prompts user to select another setting."""
-
-    # Get chat data
+    """
+    Update settings and prompts user to select another setting.
+    """
     chat_id = update.effective_chat.id
 
+    # Send message
+    await context.bot.send_message(
+        chat_id = chat_id,
+        text = UPDATED_SETTINGS_MSG
+    )
+
+    # Update database
     if type(value) == str: # add quotes to denote string in SQL
         value = f"'{value}'"
 
@@ -296,11 +326,6 @@ async def settings_update(update: Update, context: ContextTypes.DEFAULT_TYPE, se
                 {setting}={value} \
                 WHERE chat_id={chat_id}")
     con.commit()
-    
-    await context.bot.send_message(
-        chat_id = chat_id,
-        text = UPDATED_SETTINGS_MSG
-    )
 
 async def settings_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Settings for chat type"""
@@ -329,6 +354,8 @@ async def settings_destination(update: Update, context: ContextTypes.DEFAULT_TYP
 async def cancel_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancels and ends the conversation"""
     chat_id = update.effective_chat.id
+
+    # Send message
     await context.bot.send_message(
         chat_id = chat_id,
         text = CANCELLED_SETTINGS_MSG,
@@ -361,22 +388,41 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(HELP_MSG) # TODO: Update list of commands
 
 ## REGISTRATION
-async def registration_message(context: ContextTypes.DEFAULT_TYPE, chat_id, message_id=None, close=False):
-    """Creates / Re-creates menu for registration."""
+async def registration_message(context: ContextTypes.DEFAULT_TYPE, 
+                               chat_id, 
+                               date=None,
+                               t=None,
+                               message_id=None, 
+                               close=False):
+    """
+    Creates / Re-creates menu for registration.
+    """
+    chat_data = context.bot_data[chat_id]
 
+    # Get pickup and destination info
     res = cur.execute(f"SELECT pickup, destination FROM settings WHERE chat_id={chat_id}")
     data = res.fetchone()
     pickup, destination = data[0], data[1]
 
-    chat_data = context.bot_data[chat_id]
+    # Get date and time
+    if not date:
+        date = chat_data["bookings"][message_id]["date"]
+    if not t:
+        t = chat_data["bookings"][message_id]["time"]
+
+    # Get the book_id
+    if not message_id:
+        res = cur.execute("SELECT COUNT(*) FROM ridership")
+        book_id = res.fetchone()[0]
+    else:
+        book_id = chat_data["bookings"][message_id]["book_id"]
 
     # Prepare the text message
-    date = datetime.today() + timedelta(1)
-    date = date.strftime("%d %b %y")
-    text = f"Registration of {pickup} to {destination} Shuttle Bus slots for {date}."
+    text = f"Booking ID: {book_id} \n\
+Registration of {pickup} to {destination} Shuttle Bus slots for {date} at {t}."
     
     if message_id:
-        users = chat_data['users']
+        users = chat_data["bookings"][message_id]['users']
         text = f"{text}\n\nPlaces Reserved:"
         for u in users:
             text += f"\n{u['username']}"
@@ -397,6 +443,8 @@ async def registration_message(context: ContextTypes.DEFAULT_TYPE, chat_id, mess
             text = text,
             reply_markup = reply_markup,
         )
+
+        return message
     else:
         message = await context.bot.send_message(
             chat_id = chat_id,
@@ -404,40 +452,59 @@ async def registration_message(context: ContextTypes.DEFAULT_TYPE, chat_id, mess
             reply_markup = reply_markup,
         )
 
-    return message
+        return message, book_id
 
 # @group
 # @restricted
 async def book_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Sends a message to book shuttle bus slots."""
-
+    """
+    Sends a message to book shuttle bus slots.
+    """
+    # TODO: Conversation handler for this command
     chat_id = update.effective_chat.id
     chat_data = context.bot_data[chat_id]
+
+    # Get date and time
+    date = datetime.today() + timedelta(1)
+    date = date.strftime("%d %b %y")
+    t = "NA"
     
     # Send the registration message
-    message = await registration_message(context, chat_id)
+    message, book_id = await registration_message(context, chat_id, date, t)
 
     # Update data
-    chat_data["message_id"] = message.message_id
-    chat_data["bookings"] = 0
-    chat_data["users"] = []
+    chat_data["bookings"][message.message_id] = {
+        "book_id": book_id,
+        "bookings": 0,
+        "users": [],
+        "date": date,
+        "time": t
+    }
     payload = {
         chat_id: chat_data
     }
     context.bot_data.update(payload)
     print(context.bot_data)
 
-async def daily_booking(context: ContextTypes.DEFAULT_TYPE):
-    """Initiates / cancels daily booking for special cases."""
+    # Update database
+    cur.execute(f"INSERT INTO ridership VALUES \
+                ({book_id}, {chat_id}, '{date}', '{t}', 0)")
+    con.commit()
 
+async def daily_booking(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Initiates / cancels daily booking for special cases.
+    """
     chat_id = context.job.chat_id
     chat_data = context.bot_data[chat_id]
+    
     dt = datetime.today() + timedelta(1)
 
     # Check for any overwrites
     date = dt.strftime("%d %b %y")
     overwrites = chat_data["overwrite"]
     if date in overwrites:
+        # Save the overwrite temporarily
         flag = overwrites[date]
         
         # Remove overwrite once it has been triggered
@@ -451,265 +518,68 @@ async def daily_booking(context: ContextTypes.DEFAULT_TYPE):
 
         # Sends appropriate message
         if flag:
-            await book_job(context)
+            await book_job(context, "0630") # 0630 bus
+            await book_job(context, "0645") # 0645 bus
         else:
             await context.bot.send_message(
                 chat_id = chat_id,
                 text = OVERWRITE_FALSE_MSG
             )
 
-            return
+        return
 
     # Don't send message on weekends
     day = dt.weekday()
     if day == 5 or day == 6: # Don't send if the next day is Sat or Sun
         return
     
-    await book_job(context)
+    await book_job(context, "0630") # 0630 bus
+    await book_job(context, "0645") # 0645 bus
 
-async def book_job(context: ContextTypes.DEFAULT_TYPE):
-    """Sends a message to book shuttle bus slots for a day."""
-
+async def book_job(context: ContextTypes.DEFAULT_TYPE, t):
+    """
+    Sends a message to book shuttle bus slots for a day.
+    """
+    # TODO: Multiple services update
     chat_id = context.job.chat_id
     chat_data = context.bot_data[chat_id]
+
+    # Get date
+    date = datetime.today() + timedelta(1)
+    date = date.strftime("%d %b %y")
     
     # Send registration message
-    message = await registration_message(context, chat_id)
+    message, book_id = await registration_message(context, chat_id, date, t)
 
     # Update data
-    chat_data["message_id"] = message.message_id
-    chat_data["bookings"] = 0
-    chat_data["users"] = []
+    chat_data["bookings"][message.message_id] = {
+        "book_id": book_id,
+        "bookings": 0,
+        "users": [],
+        "date": date,
+        "time": t
+    }
     payload = {
         chat_id: chat_data
     }
     context.bot_data.update(payload)
     print(context.bot_data)
 
-# @group
-# @restricted
-async def close_book_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Close registration for the current day. 
-    New riders will not be registered. 
-    List of registered users will still be stored.
-    """
-    chat_id = update.effective_chat.id
-    chat_data = context.bot_data[chat_id]
-
-    # Exit if no registration to close
-    if chat_data["message_id"] == None:
-        print("Close command failed as booking not open.")
-        return
-
-    # Remove reply_markup so users cannot register
-    await registration_message(context, 
-                               chat_id, 
-                               message_id=chat_data['message_id'],
-                               close=True
-                               )
-    
-    # Notif message
-    await context.bot.send_message(chat_id = chat_id,
-                                   text = CLOSE_NOTIF_MSG)
-
-# @group
-# @restricted
-async def reopen_book_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Reopen registration for the current day. New riders can continue being registered.
-    """
-    chat_id = update.effective_chat.id
-    chat_data = context.bot_data[chat_id]
-
-    # Exit if no registration to open
-    if chat_data["message_id"] == None:
-        print("Reopen command failed as booking not open.")
-        return
-
-    # Add back reply_markup so users can register
-    await registration_message(context, 
-                               update.effective_chat.id,
-                               message_id=context.bot_data[update.effective_chat.id]['message_id']
-                               )
-    
-    # Notif message
-    await context.bot.send_message(chat_id = update.effective_chat.id,
-                                   text = REOPEN_NOTIF_MSG)
-    
-# @group
-# @restricted
-async def end_book_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ends registration"""
-    chat_id = update.effective_chat.id
-    chat_data = context.bot_data[chat_id]
-
-    # Exit if no registration to end
-    if chat_data["message_id"] == None:
-        print("End command failed as booking not open.")
-        return
-    
-    # Remove reply_markup so users cannot reply
-    await registration_message(context, 
-                               chat_id, 
-                               message_id=chat_data['message_id'],
-                               close=True
-                               )
-    
-    # Notif message
-    await context.bot.send_message(chat_id = chat_id,
-                                   text = END_NOTIF_MSG)
-    
-    # Send tokens
-    date = datetime.today() + timedelta(1)
-    date = date.strftime("%d %b %y")
-    res = cur.execute(f"SELECT pickup, destination \
-                      FROM settings WHERE chat_id={chat_id}")
-    data = res.fetchone()
-    pickup, destination = data[0], data[1]
-
-    booking_token = f"Your registration for the shuttle bus from \
-{pickup} to {destination} for {date} has been confirmed."
-    for user in chat_data["users"]:
-        try:
-            await context.bot.send_message(
-                chat_id = user["id"],
-                text = booking_token
-            )
-        except error as e:
-            print(f"Failed to send token to user {user['username']} (id: {user['id']}) as user did not initiate conversation with bot.")
-            print(e)
-
-async def end_book_job(context: ContextTypes.DEFAULT_TYPE):
-    """Ends registration"""
-
-    chat_id = context.job.chat_id
-    chat_data = context.bot_data[chat_id]
-
-    # Exit if no registration to end
-    if chat_data["message_id"] == None:
-        print("Close command failed as booking not open.")
-        return
-
-    # Remove reply_markup so users cannot reply
-    await registration_message(context, 
-                               chat_id, 
-                               message_id=chat_data['message_id'],
-                               close=True
-                               )
-    
-    # Notif message
-    await context.bot.send_message(chat_id = chat_id,
-                                   text = END_NOTIF_MSG)
-    
-    # Send tokens
-    date = datetime.today() + timedelta(1)
-    date = date.strftime("%d %b %y")
-    res = cur.execute(f"SELECT pickup, destination \
-                      FROM settings WHERE chat_id={chat_id}")
-    data = res.fetchone()
-    pickup, destination = data[0], data[1]
-
-    booking_token = f"Your registration for the shuttle bus from \
-{pickup} to {destination} for {date} has been confirmed."
-    for user in chat_data["users"]:
-        try:
-            await context.bot.send_message(
-                chat_id = user["id"],
-                text = booking_token
-            )
-        except error as e:
-            print(e)
-
-# @group
-# @restricted
-async def cancel_book_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    1730-2359: Cancel registration for the current day (irreversible).
-    Otherwise: Cancel automatic registration for the next day.
-    """
-    chat_id = update.effective_chat.id
-    chat_data = context.bot_data[chat_id]
-    
-    if chat_data["message_id"] == None: # Cancel automatic registration for the next day
-        # TODO: Replace this clause with call of booking cancellation for a range
-
-        # Update overwrite data
-        date = datetime.today() + timedelta(1)
-        date = date.strftime("%d %b %y")
-        chat_data["overwrite"][date] = False
-        payload = {
-            chat_id: chat_data
-        }
-        context.bot_data.update(payload)
-        print(context.bot_data)
-
-        # Notif Message
-        await context.bot.send_message(
-            chat_id = chat_id,
-            text = f"Booking cancelled for {date}" # TODO: Generalize
-        )
-    else: # Cancel registration for the current day
-        # Exit if no registration to cancel
-        if chat_data["message_id"] == None:
-            print("Booking reset failed as booking not open.")
-            return
-
-        # Remove button functionality
-        await registration_message(context, 
-                                chat_id, 
-                                message_id=chat_data['message_id'],
-                                close=True
-                                )
-
-        # Delete data
-        chat_data["message_id"] = None
-        chat_data["bookings"] = 0
-        chat_data["users"] = []
-        payload = {
-            chat_id: chat_data
-        }
-        context.bot_data.update(payload)
-        print(context.bot_data)
-
-        # Notif message
-        await context.bot.send_message(
-            chat_id = chat_id,
-            text = CANCEL_NOTIF_MSG
-        )
-
-# @group
-# @restricted
-async def uncancel_book_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Uncancels the next day's booking. Can also be used to overwrite the next day to True."""
-    
-    chat_id = update.effective_chat.id
-    chat_data = context.bot_data[chat_id]
-
-    # Update overwrite data
-    dt = datetime.today() + timedelta(1)
-    date = dt.strftime("%d %b %y")
-    chat_data["overwrite"][date]
-    payload = {
-        chat_id: chat_data
-    }
-    context.bot_data.update(payload)
-    print(context.bot_data)
-
-    # Notif Message
-    await context.bot.send_message(
-        chat_id = chat_id,
-        text = f"Booking uncancelled for {date}" # TODO: Generalize
-    )
-
+    # Update database
+    cur.execute(f"INSERT INTO ridership VALUES \
+                ({message.message_id}, {chat_id}, '{date}', '{t}', 0)")
+    con.commit()
 
 async def booking_cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Updates the bot once user has clicked certain options of the booking message."""
-
+    """
+    Updates the bot once user has clicked certain options of the booking message.
+    """
     query = update.callback_query.data
+    message_id = update.callback_query.message.message_id
     chat_id = update.effective_chat.id
     chat_data = context.bot_data[chat_id]
 
+    # Get max_riders from database
     res = cur.execute(f"SELECT max_riders \
                       FROM settings WHERE chat_id={chat_id}")
     data = res.fetchone()
@@ -720,8 +590,9 @@ async def booking_cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         'username': update.callback_query.from_user.username,
         'id': update.callback_query.from_user.id
     }
-    users = chat_data['users']
+    users = chat_data["bookings"][message_id]['users']
 
+    # Handle the callback
     if "book" in query: # "Book" button clicked
         # Check if max users have been reached
         if len(users) == max_riders:
@@ -735,8 +606,8 @@ async def booking_cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         users.append(user)
 
         # Update bot data
-        chat_data['bookings'] += 1
-        chat_data["users"] = users
+        chat_data["bookings"][message_id]['bookings'] += 1
+        chat_data["bookings"][message_id]["users"] = users
         payload = {
             chat_id: chat_data
         }
@@ -756,8 +627,8 @@ async def booking_cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         users.remove(user)
 
         # Update bot data
-        chat_data['bookings'] -= 1
-        chat_data["users"] = users
+        chat_data["bookings"][message_id]['bookings'] -= 1
+        chat_data["bookings"][message_id]["users"] = users
         payload = {
             chat_id: chat_data
         }
@@ -771,18 +642,353 @@ async def booking_cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # Edit the message to show list of users
     await registration_message(context, 
                                chat_id, 
-                               message_id = chat_data['message_id']
+                               message_id = message_id
                                )
 
+BOOK_ID, FUNCTION = range(5, 7)
+
+# @group
+# @restricted
+async def manage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Select the booking for the following functions: 
+     - Close
+     - Reopen
+     - End
+     - Cancel
+    """
+    chat_id = update.effective_chat.id
+
+    # Send message
+    await context.bot.send_message(
+        chat_id = chat_id,
+        text = MANAGE_MSG
+    )
+
+    return BOOK_ID
+
+async def manage_book_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Select the function to use on the booking.
+    """
+    chat_id = update.effective_chat.id
+    chat_data = context.bot_data[chat_id]
+    
+    # Get book_id
+    book_id = int(update.message.text)
+
+    # Check if book_id is valid
+    for i in chat_data["bookings"].keys():
+        if chat_data["bookings"][i]["book_id"] == book_id:
+            fail = False
+    if fail:
+        # Send message
+        await context.bot.send_message(
+            chat_id = chat_id,
+            text = INVALID_BOOK_ID_MSG
+        )
+
+        return BOOK_ID
+    else:
+        # Temporarily save book_id selected by user
+        context.user_data["book_id"] = book_id
+        print(context.user_data)
+    
+    # Send message
+    buttons = [
+        [KeyboardButton("Close"),
+         KeyboardButton("Reopen")],
+        [KeyboardButton("End"),
+         KeyboardButton("Cancel")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(buttons, one_time_keyboard=True)
+    await context.bot.send_message(
+        chat_id = update.effective_chat.id,
+        text = MANAGE_FUNCTIONS_MSG,
+        reply_markup = reply_markup
+    )
+        
+    return FUNCTION
+
+async def manage_function(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Executes the function chosen.
+    """
+    chat_id = update.effective_chat.id
+    chat_data = context.bot_data[chat_id]
+
+    # Get book_id's corresponding message_id
+    for i in chat_data["bookings"].keys():
+        if chat_data["bookings"][i]["book_id"] == context.user_data["book_id"]:
+            message_id = i
+
+    # Execute function based on user's selection
+    selection = update.message.text
+    match selection:
+        case "Close":
+            await manage_close(update, context, message_id)
+        case "Reopen":
+            await manage_reopen(update, context, message_id)
+        case "End":
+            await manage_end(update, context, message_id)
+        case "Cancel":
+            await manage_cancel(update, context, message_id)
+
+    # Remove book_id selected by user
+    del context.user_data["book_id"]
+    print(context.user_data)
+
+    return ConversationHandler.END
+
+async def manage_close(update: Update, context: ContextTypes.DEFAULT_TYPE, message_id):
+    """
+    Close registration for the current day. 
+    New riders will not be registered. 
+    List of registered users will still be stored.
+    """
+    chat_id = update.effective_chat.id
+
+    # Remove reply_markup so users cannot register
+    await registration_message(context, 
+                               chat_id, 
+                               message_id=message_id,
+                               close=True
+                               )
+    
+    # Notif message
+    await context.bot.send_message(chat_id = chat_id,
+                                   text = CLOSE_NOTIF_MSG)
+
+async def manage_reopen(update: Update, context: ContextTypes.DEFAULT_TYPE, message_id):
+    """
+    Reopen registration for the selected booking. New riders can continue being registered.
+    """
+    chat_id = update.effective_chat.id
+
+    # Add back reply_markup so users can register
+    await registration_message(context, 
+                               chat_id,
+                               message_id=message_id
+                               )
+    
+    # Notif message
+    await context.bot.send_message(chat_id = update.effective_chat.id,
+                                   text = REOPEN_NOTIF_MSG)
+
+async def manage_end(update: Update, context: ContextTypes.DEFAULT_TYPE, message_id):
+    """Ends registration"""
+    chat_id = update.effective_chat.id
+    chat_data = context.bot_data[chat_id]
+
+    # Get date
+    date = datetime.today() + timedelta(1)
+    date = date.strftime("%d %b %y")
+    
+    # Remove reply_markup so users cannot reply
+    await registration_message(context, 
+                               chat_id, 
+                               message_id=message_id,
+                               close=True
+                               )
+    
+    # Notif message
+    await context.bot.send_message(chat_id = chat_id,
+                                   text = END_NOTIF_MSG)
+    
+    # Send tokens
+    res = cur.execute(f"SELECT pickup, destination \
+                      FROM settings WHERE chat_id={chat_id}")
+    data = res.fetchone()
+    pickup, destination = data[0], data[1]
+
+    booking_token = f"Your registration for the shuttle bus from \
+{pickup} to {destination} for {date} has been confirmed."
+    for user in chat_data["bookings"][message_id]["users"]:
+        try:
+            await context.bot.send_message(
+                chat_id = user["id"],
+                text = booking_token
+            )
+        except error as e:
+            print(f"Failed to send token to user {user['username']} (id: {user['id']}) as user did not initiate conversation with bot.")
+            print(e)
+    
+    # Update database
+    book_id = chat_data["bookings"][message_id]["book_id"]
+    bookings = chat_data["bookings"][message_id]["bookings"]
+    cur.execute(f"UPDATE ridership SET \
+                riders={bookings} \
+                WHERE book_id={book_id}")
+    con.commit()
+
+    # Delete data
+    del chat_data["bookings"][message_id]
+    payload = {
+        chat_id: chat_data
+    }
+    context.bot_data.update(payload)
+    print(context.bot_data)
+    
+async def manage_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE, message_id):
+    """
+    Cancels registration for the selected booking (irreversible).
+    """
+    chat_id = update.effective_chat.id
+    chat_data = context.bot_data[chat_id]
+
+    # Remove button functionality
+    await registration_message(context, 
+                               chat_id, 
+                               message_id = message_id,
+                               close=True
+                               )
+
+    # Delete data
+    del chat_data["bookings"][message_id]
+    payload = {
+        chat_id: chat_data
+    }
+    context.bot_data.update(payload)
+    print(context.bot_data)
+
+    # Notif message
+    await context.bot.send_message(
+        chat_id = chat_id,
+        text = CANCEL_NOTIF_MSG
+    )
+
+# @group
+# @restricted
+async def cancel_book_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Cancels automatic registration for the next day
+    """
+    # TODO: Replace this clause with call of booking cancellation for a range
+    chat_id = update.effective_chat.id
+    chat_data = context.bot_data[chat_id]
+
+    date = datetime.today() + timedelta(1)
+    date = date.strftime("%d %b %y")
+
+    # Update overwrite data
+    chat_data["overwrite"][date] = False
+    payload = {
+        chat_id: chat_data
+    }
+    context.bot_data.update(payload)
+    print(context.bot_data)
+
+    # Notif Message
+    await context.bot.send_message(
+        chat_id = chat_id,
+        text = f"Booking cancelled for {date}"
+    )
+
+# @group
+# @restricted
+async def uncancel_book_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Uncancels the next day's booking by overwriting the next day to True.
+    """
+    chat_id = update.effective_chat.id
+    chat_data = context.bot_data[chat_id]
+
+    dt = datetime.today() + timedelta(1)
+    date = dt.strftime("%d %b %y")
+
+    # Update overwrite data
+    chat_data["overwrite"][date]
+    payload = {
+        chat_id: chat_data
+    }
+    context.bot_data.update(payload)
+    print(context.bot_data)
+
+    # Notif Message
+    await context.bot.send_message(
+        chat_id = chat_id,
+        text = f"Booking uncancelled for {date}" # TODO: Generalize
+    )
+
+async def end_book_job(context: ContextTypes.DEFAULT_TYPE):
+    """Ends all registrations"""
+
+    chat_id = context.job.chat_id
+    chat_data = context.bot_data[chat_id]
+
+    date = datetime.today() + timedelta(1)
+    date = date.strftime("%d %b %y")
+
+    res = cur.execute(f"SELECT pickup, destination \
+                        FROM settings WHERE chat_id={chat_id}")
+    data = res.fetchone()
+    pickup, destination = data[0], data[1]
+
+    for message_id in chat_data["bookings"].keys():
+
+        # Remove reply_markup so users cannot reply
+        await registration_message(context, 
+                                chat_id, 
+                                message_id=message_id,
+                                close=True
+                                )
+        
+        # Update database
+        book_id = chat_data["bookings"][message_id]["bookings"]
+        bookings = chat_data["bookings"][message_id]["bookings"]
+        cur.execute(f"UPDATE ridership SET \
+                    riders={bookings} \
+                    WHERE book_id={book_id}")
+        con.commit()
+            
+        # Send tokens
+        booking_token = f"Your registration for the shuttle bus from \
+{pickup} to {destination} for {date} has been confirmed."
+        for user in chat_data["bookings"][message_id]["users"]:
+            try:
+                await context.bot.send_message(
+                    chat_id = user["id"],
+                    text = booking_token
+                )
+            except error as e:
+                print(f"Failed to send token to user {user['username']} (id: {user['id']}) as user did not initiate conversation with bot.")
+                print(e)
+
+    # Delete data
+    chat_data["bookings"] = {}
+    payload = {
+        chat_id: chat_data
+    }
+    context.bot_data.update(payload)
+    print(context.bot_data)
+
+    # Notif message
+    await context.bot.send_message(chat_id = chat_id,
+                                   text = END_NOTIF_MSG)
+    
+manage_book_handler = ConversationHandler(
+    entry_points = [CommandHandler("manage", manage_command)],
+    states = {
+        BOOK_ID: [MessageHandler(filters.Regex(r"^[0-9]+$"), manage_book_id),
+                  MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
+        FUNCTION: [MessageHandler(filters.Regex(r"^(Close|Reopen|End|Cancel)$"), manage_function),
+                   MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
+    },
+    fallbacks = [CommandHandler("cancel", cancel_settings)]
+)
+
 ## BROADCAST / NOTIFICATION
-CONFIRM, SENT = range(6, 8) # States for broadcast conversation handler
+CONFIRM, SENT = range(7, 9) # States for broadcast conversation handler
 
 # @group
 # @restricted
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Broadcast a message to every service chat."""
-    
+    """
+    Broadcast a message to every service chat.
+    """
     chat_id = update.effective_chat.id
+    
+    # Send message
     await context.bot.send_message(
         chat_id = chat_id,
         text = BROADCAST_PROMPT_MSG
@@ -791,9 +997,12 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return CONFIRM
 
 async def broadcast_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send a message to confirm sending the message."""
-
+    """
+    Send a message to confirm sending the message.
+    """
     chat_id = update.effective_chat.id
+
+    # Send message
     message = update.message.text
     text = f'"{message}"\n\n{BROADCAST_CONFIRM_MSG}'
 
@@ -815,9 +1024,11 @@ async def broadcast_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SENT
 
 async def broadcast_sent(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send a confirmation message for the broadcast."""
-
+    """
+    Send a confirmation message for the broadcast.
+    """
     chat_id = update.effective_chat.id
+
     message = update.message.text
 
     if message == "Yes":
@@ -839,6 +1050,7 @@ async def broadcast_sent(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
 
         del context.user_data["broadcast"]
+        print(context.user_data)
 
         return ConversationHandler.END
     
@@ -850,9 +1062,12 @@ async def broadcast_sent(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return CONFIRM
 
 async def cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Sends a message to indicate broadcast has been cancelled."""
-
+    """
+    Sends a message to indicate broadcast has been cancelled.
+    """
     chat_id = update.effective_chat.id
+
+    # Send message
     await context.bot.send_message(
         chat_id = chat_id,
         text = BROADCAST_CANCEL_MSG
@@ -889,6 +1104,47 @@ async def notify_late(update: Update, context: ContextTypes.DEFAULT_TYPE, all_ch
         )
 
 
+### DATA AND STATISTICS
+# @group
+# @restricted
+async def view_data_summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Sends a message displaying the ridership stats.
+     - Average ridership / day for each service (overall for all bus timings)
+    """
+    chat_id = update.effective_chat.id
+
+    res = cur.execute("SELECT chat_id FROM settings WHERE chat_type='service'")
+    chat_ids = res.fetchall()
+    chat_ids = [chat[0] for chat in chat_ids]
+
+    # Get averages for each chat_id
+    text = "Average daily riderships across bus services: \n"
+    for chat in chat_ids:
+        # Get average
+        res = cur.execute(f"SELECT date, SUM(riders) FROM ridership WHERE chat_id={chat} GROUP BY date")
+        riders = res.fetchall()
+        s = sum([r[1] for r in riders])
+        l = len(riders)
+        avg = s / l
+
+        # Get pickup and destination
+        res = cur.execute(f"SELECT pickup, destination FROM settings \
+                          WHERE chat_id={chat}")
+        data = res.fetchone()
+        pickup, destination = data[0], data[1]
+
+        # Add to text
+        text = f"{text}\n{pickup} -> {destination}: {avg}"
+    
+    # Send messages
+    await context.bot.send_message(
+        chat_id = chat_id,
+        text = text
+    )
+
+
+### ERROR
 async def error(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Catches any error and prints it to the command line for debugging."""
     print(f'Update:\n {update}\n caused error:\n {context.error}')
@@ -911,7 +1167,13 @@ res = cur.execute("CREATE TABLE IF NOT EXISTS settings (\
                   destination TEXT NOT NULL\
                   )") # Create settings table
 
-# TODO: Decide on a data structure for user_data table
+res = cur.execute("CREATE TABLE IF NOT EXISTS ridership (\
+                  book_id INTEGER PRIMARY KEY, \
+                  chat_id INTEGER NOT NULL, \
+                  date TEXT NOT NULL, \
+                  time TEXT NOT NULL, \
+                  riders INTEGER NOT NULL\
+                  )") # Create ridership table
 
 print('Starting bot...') # Logging
 
@@ -937,21 +1199,21 @@ async def lifespan(app: FastAPI):
         await ptb.stop()
 
 # Create the FastAPI application
-app = FastAPI(lifespan=lifespan) # Do not run FastAPI code for local dev using polling
+# app = FastAPI(lifespan=lifespan) # Do not run FastAPI code for local dev using polling
 
-@app.get("/")
-async def index():
-    """Landing page for the bot."""
-    # TODO FUTURE: Add a basic single static page here to explain the bot!
-    return "Hello"
+# @app.get("/")
+# async def index():
+#     """Landing page for the bot."""
+#     # TODO FUTURE: Add a basic single static page here to explain the bot!
+#     return "Hello"
 
-@app.post("/webhook")
-async def process_update(request: Request):
-    """Updates PTB application when post request received at webhook"""
-    req = await request.json()
-    update = Update.de_json(req, ptb.bot)
-    await ptb.process_update(update)
-    return Response(status_code = HTTPStatus.OK)
+# @app.post("/webhook")
+# async def process_update(request: Request):
+#     """Updates PTB application when post request received at webhook"""
+#     req = await request.json()
+#     update = Update.de_json(req, ptb.bot)
+#     await ptb.process_update(update)
+#     return Response(status_code = HTTPStatus.OK)
 
 # Set up PTB handlers
 # Commands (General)
@@ -963,9 +1225,7 @@ ptb.add_handler(CommandHandler('help', help_command))
 # Commands (Booking)
 ptb.add_handler(CommandHandler('book', book_command))
 ptb.add_handler(CallbackQueryHandler(booking_cb_handler, r"^(book|cancel)$")) # Handles callbacks for book command
-ptb.add_handler(CommandHandler('close_book', close_book_command))
-ptb.add_handler(CommandHandler('reopen_book', reopen_book_command))
-ptb.add_handler(CommandHandler('end_book', end_book_command))
+ptb.add_handler(manage_book_handler)
 ptb.add_handler(CommandHandler('cancel_book', cancel_book_command))
 ptb.add_handler(CommandHandler('uncancel_book', uncancel_book_command))
 
@@ -974,6 +1234,9 @@ ptb.add_handler(broadcast_handler)
 ptb.add_handler(CommandHandler('notify_late', lambda u, c: notify_late(u, c)))
 ptb.add_handler(CommandHandler('notify_late_all', lambda u, c: notify_late(u, c, all_chats=True)))
 
+# Commands (Data)
+ptb.add_handler(CommandHandler('view_data_summary', view_data_summary_command))
+
 # Messages
 # For later development
 
@@ -981,6 +1244,6 @@ ptb.add_handler(CommandHandler('notify_late_all', lambda u, c: notify_late(u, c,
 ptb.add_error_handler(error)
 
 # Polling, for dev purposes
-# print('Polling...')
-# ptb.run_polling(poll_interval=1, allowed_updates=Update.ALL_TYPES)
+print('Polling...')
+ptb.run_polling(poll_interval=1, allowed_updates=Update.ALL_TYPES)
     
