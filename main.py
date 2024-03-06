@@ -1126,9 +1126,13 @@ async def view_data_summary_command(update: Update, context: ContextTypes.DEFAUL
         # Get average
         res = cur.execute(f"SELECT date, SUM(riders) FROM ridership WHERE chat_id={chat} GROUP BY date")
         riders = res.fetchall()
-        s = sum([r[1] for r in riders])
-        l = len(riders)
-        avg = s / l
+
+        if len(riders) == 0:
+            avg = 0
+        else:
+            s = sum([r[1] for r in riders])
+            l = len(riders)
+            avg = s / l
 
         # Get pickup and destination
         res = cur.execute(f"SELECT pickup, destination FROM settings \
@@ -1248,4 +1252,3 @@ ptb.add_error_handler(error)
 # Polling, for dev purposes
 # print('Polling...')
 # ptb.run_polling(poll_interval=1, allowed_updates=Update.ALL_TYPES)
-    
