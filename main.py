@@ -1,5 +1,5 @@
 """
-RSNBusBot v1.0.0
+RSNBusBot v1.0.1
 """
 
 ### IMPORTS
@@ -28,7 +28,7 @@ from http import HTTPStatus
 import os
 from datetime import datetime, timedelta, time
 import pytz
-from functools import wraps
+from functools import wraps, reduce
 
 import sqlite3
 
@@ -55,7 +55,6 @@ RIDER_SETTING_MSG = """Please enter a number for the max riders allowed per regi
 PICKUP_SETTING_MSG = """Please enter the pickup location."""
 DESTINATION_SETTING_MSG = """Please enter the destination."""
 UPDATED_SETTINGS_MSG = """Settings updated! Select another setting to continue editing, or /cancel to stop editing."""
-CANCELLED_SETTINGS_MSG = """Settings cancelled."""
 INVALID_RESPONSE_MSG = """Invalid response."""
 HELP_MSG = """Here are a list of currently available commands:
 /start - Introduce the bot; initialize daily registration.
@@ -92,6 +91,8 @@ BROADCAST_CONFIRM_MSG = """Please confirm that this is the message you want to b
 BROADCAST_SENT_MSG = """Message has been broadcasted!"""
 BROADCAST_CANCEL_MSG = """Broadcasting has been cancelled!"""
 NOTIFY_LATE_MSG = """Dear all, the bus at 0700hrs will be late. Please inform your respective units of the delay and to seek their understanding. Thank you"""
+CANCELLED_CONVERSATION_MSG = """Conversation exited."""
+TIMEOUT_CONVERSATION_MSG = """Conversation timeout reached, conversation exited."""
 
 
 ### DATABASE
@@ -155,6 +156,32 @@ async def invalid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_message(
         chat_id = chat_id,
         text = INVALID_RESPONSE_MSG,
+    )
+
+# Cancel conversation
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancels and ends the conversation"""
+    chat_id = update.effective_chat.id
+
+    # Send message
+    await context.bot.send_message(
+        chat_id = chat_id,
+        text = CANCELLED_CONVERSATION_MSG,
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+    return ConversationHandler.END
+
+# Timeout converasation
+async def timeout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel the conversation due to timeout"""
+    chat_id = update.effective_chat.id
+
+    # Send message
+    await context.bot.send_message(
+        chat_id = chat_id,
+        text = TIMEOUT_CONVERSATION_MSG,
+        reply_markup=ReplyKeyboardRemove()
     )
 
 
@@ -352,19 +379,6 @@ async def settings_destination(update: Update, context: ContextTypes.DEFAULT_TYP
     await settings_update(update, context, "destination", update.message.text)
     return SELECT
 
-async def cancel_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancels and ends the conversation"""
-    # TODO: Make this generalized
-    chat_id = update.effective_chat.id
-
-    # Send message
-    await context.bot.send_message(
-        chat_id = chat_id,
-        text = CANCELLED_SETTINGS_MSG,
-    )
-
-    return ConversationHandler.END
-
 settings_handler = ConversationHandler(
     entry_points=[CommandHandler("settings", settings_command)],
     states = {
@@ -378,8 +392,10 @@ settings_handler = ConversationHandler(
                  MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
         DESTINATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_destination),
                  MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
+        ConversationHandler.TIMEOUT: [MessageHandler(filters.ALL, timeout)],
     },
-    fallbacks = [CommandHandler("cancel", cancel_settings)]
+    fallbacks = [CommandHandler("cancel", cancel)],
+    conversation_timeout = 10,
 )
 
 # @group
@@ -593,6 +609,7 @@ async def booking_cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
         'id': update.callback_query.from_user.id
     }
     users = chat_data["bookings"][message_id]['users']
+    all_users = reduce(lambda l, msg: l + msg["users"], chat_data["bookings"].values(), [])
 
     # Handle the callback
     if "book" in query: # "Book" button clicked
@@ -601,7 +618,7 @@ async def booking_cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
             print(f"Registration failed as maximum number of riders have registered.")
             return
         # Check if user has already booked
-        if user in users:
+        if user in all_users:
             print(f"Registration failed as user attempted to register twice.")
             return
 
@@ -811,7 +828,7 @@ async def manage_end(update: Update, context: ContextTypes.DEFAULT_TYPE, message
                 chat_id = user["id"],
                 text = booking_token
             )
-        except error as e:
+        except Exception as e:
             print(f"Failed to send token to user {user['username']} (id: {user['id']}) as user did not initiate conversation with bot.")
             print(e)
     
@@ -952,7 +969,7 @@ async def end_book_job(context: ContextTypes.DEFAULT_TYPE):
                     chat_id = user["id"],
                     text = booking_token
                 )
-            except error as e:
+            except Exception as e:
                 print(f"Failed to send token to user {user['username']} (id: {user['id']}) as user did not initiate conversation with bot.")
                 print(e)
 
@@ -975,8 +992,10 @@ manage_book_handler = ConversationHandler(
                   MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
         FUNCTION: [MessageHandler(filters.Regex(r"^(Close|Reopen|End|Cancel)$"), manage_function),
                    MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
+        ConversationHandler.TIMEOUT: [MessageHandler(filters.ALL, timeout)],
     },
-    fallbacks = [CommandHandler("cancel", cancel_settings)] 
+    fallbacks = [CommandHandler("cancel", cancel)],
+    conversation_timeout = 10,
 )
 
 ## BROADCAST / NOTIFICATION
@@ -1084,8 +1103,10 @@ broadcast_handler = ConversationHandler(
                  MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
         SENT: [MessageHandler(filters.Regex(r"^(Yes|No)$"), broadcast_sent),
                  MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
+        ConversationHandler.TIMEOUT: [MessageHandler(filters.ALL, timeout)],
     },
-    fallbacks = [CommandHandler("cancel", cancel_broadcast)]
+    fallbacks = [CommandHandler("cancel", cancel_broadcast)],
+    conversation_timeout = 10,
 )
 
 # @group
@@ -1205,21 +1226,21 @@ async def lifespan(app: FastAPI):
         await ptb.stop()
 
 # Create the FastAPI application
-app = FastAPI(lifespan=lifespan) # Do not run FastAPI code for local dev using polling
+# app = FastAPI(lifespan=lifespan) # Do not run FastAPI code for local dev using polling
 
-@app.get("/")
-async def index():
-    """Landing page for the bot."""
-    # TODO FUTURE: Add a basic single static page here to explain the bot!
-    return "Hello"
+# @app.get("/")
+# async def index():
+#     """Landing page for the bot."""
+#     # TODO FUTURE: Add a basic single static page here to explain the bot!
+#     return "Hello"
 
-@app.post("/webhook")
-async def process_update(request: Request):
-    """Updates PTB application when post request received at webhook"""
-    req = await request.json()
-    update = Update.de_json(req, ptb.bot)
-    await ptb.process_update(update)
-    return Response(status_code = HTTPStatus.OK)
+# @app.post("/webhook")
+# async def process_update(request: Request):
+#     """Updates PTB application when post request received at webhook"""
+#     req = await request.json()
+#     update = Update.de_json(req, ptb.bot)
+#     await ptb.process_update(update)
+#     return Response(status_code = HTTPStatus.OK)
 
 # Set up PTB handlers
 # Commands (General)
@@ -1250,5 +1271,5 @@ ptb.add_handler(CommandHandler('view_data_summary', view_data_summary_command))
 ptb.add_error_handler(error)
 
 # Polling, for dev purposes
-# print('Polling...')
-# ptb.run_polling(poll_interval=1, allowed_updates=Update.ALL_TYPES)
+print('Polling...')
+ptb.run_polling(poll_interval=1, allowed_updates=Update.ALL_TYPES)
