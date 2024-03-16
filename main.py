@@ -1013,8 +1013,7 @@ async def daily_booking(context: ContextTypes.DEFAULT_TYPE):
         # Check for weekends
         day = dt.weekday()
         if day == 5 or day == 6: # Don't send if the next day is Sat or Sun
-            # return
-            pass
+            return
         
         # Send if it's a regular day
         await book_job(context, chat_id, t)
