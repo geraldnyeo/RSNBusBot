@@ -317,18 +317,22 @@ async def view_settings_command(update: Update, context: ContextTypes.DEFAULT_TY
     # Get database data
     res = cur.execute(f"SELECT max_riders, pickup, destination, chat_type \
                       FROM settings WHERE chat_id={chat_id}")
-    data = res.fetchone()
-    if data is None:
+    settings_data = res.fetchone()
+    if settings_data is None:
         print("Unable to retrieve data from database.")
         return
+    
+    res = cur.execute(f"SELECT bus_id, time FROM buses WHERE chat_id={chat_id}")
+    bus_data = res.fetchall()
 
     # Prepare message
     text = f"{VIEW_SETTINGS_MSG}\nChat ID: {chat_id}"
     settings = ["Max Riders", "Pickup", "Destination", "Chat Type"]
     for i in range(len(settings)):
-        text = f"{text}\n{settings[i]}: {data[i]}"
-
-    # TODO: Add in settings for buses
+        text = f"{text}\n{settings[i]}: {settings_data[i]}"
+    text = f"{text}\n\nBuses:"
+    for i in bus_data:
+        text = f"{text}\n - {i[0]}: {i[1]}H"
     
     # Send message
     await context.bot.send_message(
@@ -725,16 +729,17 @@ async def manage_book_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     Select the function to use on the booking.
     """
     chat_id = update.effective_chat.id
-    chat_data = context.bot_data[chat_id]
     
     # Get book_id
     book_id = int(update.message.text)
 
     # Check if book_id is valid
-    for i in chat_data["bookings"].keys():
-        if chat_data["bookings"][i]["book_id"] == book_id:
-            fail = False
-    if fail:
+    target_chat_id = None
+    for i, chat in context.bot_data.items():
+        for j in chat["bookings"].keys():
+            if chat["bookings"][j]["book_id"] == book_id:
+                target_chat_id = i
+    if target_chat_id == None:
         # Send message
         await context.bot.send_message(
             chat_id = chat_id,
@@ -745,6 +750,7 @@ async def manage_book_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         # Temporarily save book_id selected by user
         context.user_data["book_id"] = book_id
+        context.user_data["target_chat_id"] = target_chat_id
         print(context.user_data)
     
     # Send message
@@ -756,7 +762,7 @@ async def manage_book_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = ReplyKeyboardMarkup(buttons, one_time_keyboard=True)
     await context.bot.send_message(
-        chat_id = update.effective_chat.id,
+        chat_id = chat_id,
         text = MANAGE_FUNCTIONS_MSG,
         reply_markup = reply_markup
     )
@@ -767,12 +773,11 @@ async def manage_function(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Executes the function chosen.
     """
-    chat_id = update.effective_chat.id
-    chat_data = context.bot_data[chat_id]
-
     # Get book_id's corresponding message_id
-    for i in chat_data["bookings"].keys():
-        if chat_data["bookings"][i]["book_id"] == context.user_data["book_id"]:
+    target_chat_id = context.user_data["target_chat_id"]
+    bookings = context.bot_data[target_chat_id]["bookings"]
+    for i in bookings.keys():
+        if bookings[i]["book_id"] == context.user_data["book_id"]:
             message_id = i
 
     # Execute function based on user's selection
@@ -789,6 +794,7 @@ async def manage_function(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Remove book_id selected by user
     del context.user_data["book_id"]
+    del context.user_data["target_chat_id"]
     print(context.user_data)
 
     return ConversationHandler.END
@@ -799,39 +805,39 @@ async def manage_close(update: Update, context: ContextTypes.DEFAULT_TYPE, messa
     New riders will not be registered. 
     List of registered users will still be stored.
     """
-    chat_id = update.effective_chat.id
+    target_chat_id = context.user_data["target_chat_id"]
 
     # Remove reply_markup so users cannot register
     await registration_message(context, 
-                               chat_id, 
+                               target_chat_id, 
                                message_id=message_id,
                                close=True
                                )
     
     # Notif message
-    await context.bot.send_message(chat_id = chat_id,
+    await context.bot.send_message(chat_id = target_chat_id,
                                    text = CLOSE_NOTIF_MSG)
 
 async def manage_reopen(update: Update, context: ContextTypes.DEFAULT_TYPE, message_id):
     """
     Reopen registration for the selected booking. New riders can continue being registered.
     """
-    chat_id = update.effective_chat.id
+    target_chat_id = context.user_data["target_chat_id"]
 
     # Add back reply_markup so users can register
     await registration_message(context, 
-                               chat_id,
+                               target_chat_id,
                                message_id=message_id
                                )
     
     # Notif message
-    await context.bot.send_message(chat_id = update.effective_chat.id,
+    await context.bot.send_message(chat_id = target_chat_id,
                                    text = REOPEN_NOTIF_MSG)
 
 async def manage_end(update: Update, context: ContextTypes.DEFAULT_TYPE, message_id):
     """Ends registration"""
-    chat_id = update.effective_chat.id
-    chat_data = context.bot_data[chat_id]
+    target_chat_id = context.user_data["target_chat_id"]
+    chat_data = context.bot_data[target_chat_id]
 
     # Get date
     date = datetime.today() + timedelta(1)
@@ -839,18 +845,18 @@ async def manage_end(update: Update, context: ContextTypes.DEFAULT_TYPE, message
     
     # Remove reply_markup so users cannot reply
     await registration_message(context, 
-                               chat_id, 
+                               target_chat_id, 
                                message_id=message_id,
                                close=True
                                )
     
     # Notif message
-    await context.bot.send_message(chat_id = chat_id,
+    await context.bot.send_message(chat_id = target_chat_id,
                                    text = END_NOTIF_MSG)
     
     # Send tokens
     res = cur.execute(f"SELECT pickup, destination \
-                      FROM settings WHERE chat_id={chat_id}")
+                      FROM settings WHERE chat_id={target_chat_id}")
     data = res.fetchone()
     pickup, destination = data[0], data[1]
 
@@ -877,7 +883,7 @@ async def manage_end(update: Update, context: ContextTypes.DEFAULT_TYPE, message
     # Delete data
     del chat_data["bookings"][message_id]
     payload = {
-        chat_id: chat_data
+        target_chat_id: chat_data
     }
     context.bot_data.update(payload)
     print(context.bot_data)
@@ -886,27 +892,33 @@ async def manage_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE, mess
     """
     Cancels registration for the selected booking (irreversible).
     """
-    chat_id = update.effective_chat.id
-    chat_data = context.bot_data[chat_id]
+    target_chat_id = context.user_data["target_chat_id"]
+    chat_data = context.bot_data[target_chat_id]
 
     # Remove button functionality
     await registration_message(context, 
-                               chat_id, 
+                               target_chat_id, 
                                message_id = message_id,
                                close=True
                                )
+    
+    # Update database
+    book_id = chat_data["bookings"][message_id]["book_id"]
+    cur.execute(f"DELETE FROM ridership \
+                WHERE book_id={book_id}")
+    con.commit()
 
     # Delete data
     del chat_data["bookings"][message_id]
     payload = {
-        chat_id: chat_data
+        target_chat_id: chat_data
     }
     context.bot_data.update(payload)
     print(context.bot_data)
 
     # Notif message
     await context.bot.send_message(
-        chat_id = chat_id,
+        chat_id = target_chat_id,
         text = CANCEL_NOTIF_MSG
     )
 
