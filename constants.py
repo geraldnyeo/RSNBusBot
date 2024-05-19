@@ -55,7 +55,7 @@ Close
 Reopen
 End
 Cancel"""
-INVALID_BOOK_ID_MSG = "Invalid booking ID. Please try again: "
+INVALID_BOOK_ID_MSG = """Invalid booking ID. Please try again: """
 CLOSE_NOTIF_MSG = """Registration has been closed by the admin."""
 REOPEN_NOTIF_MSG = """Registration has been reopened by the admin."""
 END_NOTIF_MSG = """Registration has ended."""
@@ -63,10 +63,24 @@ END_DAILY_NOTIF_MSG = """Registration has been ended for the day."""
 CANCEL_NOTIF_MSG = """Registration has been cancelled by the admin."""
 OVERWRITE_FALSE_MSG = """Dear all, the bus service will not be running tomorrow. Thank you for your understanding."""
 
+VIEW_SCHEDULE_MSG = """Please enter bus ID of service schedule to view:"""
+SCHEDULE_MSG = """Please enter bus ID of service to schedule: """
+SCHEDULE_FUNCTION_MSG = """Please select a scheduling function (Book/Cancel)."""
+INVALID_BUS_ID_MSG = """Invalid bus ID. Please try again: """
+SCHEDULE_DATES_MSG = """Please send a list of date ranges in this format. E.g.,
+
+010124
+030124-050124
+
+A minimum of one date or date range must be sent.
+Date ranges include start and end dates.
+"""
+UPDATED_SCHEDULE_MSG = """Schedule has been updated!"""
+INVALID_SCHEDULE_DATE_MSG = """Invalid schedule dates. Please try again."""
+
 BROADCAST_PROMPT_MSG = """Please type the message you wish to broadcast, or /cancel to cancel broadcast."""
 BROADCAST_CONFIRM_MSG = """Please confirm that this is the message you want to broadcast? (Yes/No)"""
 BROADCAST_SENT_MSG = """Message has been broadcasted!"""
-BROADCAST_CANCEL_MSG = """Broadcasting has been cancelled!"""
 NOTIFY_LATE_MSG = """Dear all, the bus at 0700hrs will be late. Please inform your respective units of the delay and to seek their understanding. Thank you"""
 
 CONVERSATION_INVALID_MSG = """Invalid response."""

@@ -22,7 +22,7 @@ from telegram.ext import (
 import sqlite3
 
 import os
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta
 from functools import wraps, reduce
 
 from constants import * # Ensure constants.py in same directory
@@ -127,6 +127,98 @@ async def timeout(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=ReplyKeyboardRemove()
     )
 
+# Clean the schedule table
+async def clean_schedule(bus_ids = None):
+    """
+    Organise the schedule so that repeats are avoided.
+    """
+    # Connect to DB
+    con = sqlite3.connect(f"{DB_FILEPATH}/rsnbusbot.db")
+    cur = con.cursor()
+
+    # Get all bus IDs
+    if bus_ids == None:
+        res = cur.execute("SELECT bus_id FROM buses")
+        bus_ids = [i[0] for i in bus_ids]
+
+    for bus_id in bus_ids:
+        # Get current schedule for bus ID
+        res = cur.execute(f"SELECT start_date, end_date, status FROM schedule \
+                                WHERE bus_id={bus_id}")
+        schedule = res.fetchall()
+        dates_sorted = []
+        for i in schedule:
+            dt_format = [datetime.strptime(i[0], '%d%m%y'), \
+                         datetime.strptime(i[1], '%d%m%y'), \
+                        i[2]]
+            
+            if len(dates_sorted) == 0:
+                dates_sorted.append(dt_format)
+                continue
+
+            j = 0
+            flag = False
+            while j < len(dates_sorted):
+                entry = dates_sorted[j]
+
+                # overlaps at start
+                if dt_format[0] <= entry[0]  and dt_format[1] >= entry[0]:
+                    # envelopes
+                    if dt_format[1] >= entry[1]:
+                        # print("Envelopes")
+                        del dates_sorted[j]
+                        j -= 1
+                    
+                    # does not envelope
+                    else:
+                        if dt_format[2] == entry[2]:
+                            # print("Overlap start, same function")
+                            dates_sorted[j][0] = dt_format[0]
+                        else:
+                            # print("Overlap start, swap function")
+                            dates_sorted.insert(j, dt_format)
+                            dates_sorted[j + 1][0] = dt_format[1] + timedelta(days = 1)
+
+                        flag = True
+                        break
+
+                # overlaps at end
+                elif dt_format[0] < entry[1] and dt_format[1] >= entry[1]:
+                    if dt_format[2] == entry[2]:
+                        # print("Overlap end, same function")
+                        dt_format[0] = entry[0]
+                        del dates_sorted[j]
+                        j -= 1
+                    else:
+                        # print("Overlap end, swap function")
+                        dates_sorted[j][1] = dt_format[0] - timedelta(days = 1)
+
+                j += 1
+
+            if not flag:
+                dates_sorted.append(dt_format)
+
+        # Update the table
+        cur.execute(f"DELETE FROM schedule WHERE bus_id={bus_id}")
+        con.commit()
+        
+        today = datetime.now()
+        for i in dates_sorted:
+            if today.date() > i[1].date(): # end date exceeded
+                continue
+
+            start, end = i[0].strftime('%d%m%y'), i[1].strftime('%d%m%y')
+            cur.execute(f"INSERT INTO schedule VALUES \
+                        ( \
+                            {bus_id}, \
+                            '{start}', \
+                            '{end}', \
+                            {i[2]} \
+                        )")
+            con.commit()
+        
+        con.close()
+
 
 ### COMMANDS
 ## GENERAL / SETTINGS
@@ -171,7 +263,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     exists = exists[0]
 
     # Initialize settings
-    if not exists: 
+    if not exists:
         # New entry for settings
         cur.execute(f"INSERT INTO settings VALUES \
                     ({chat_id}, 'Service', {DEFAULT_MAX_RIDERS}, '', '')")
@@ -366,7 +458,8 @@ async def settings_update(update: Update, context: ContextTypes.DEFAULT_TYPE, se
     # Send message
     await context.bot.send_message(
         chat_id = chat_id,
-        text = UPDATED_SETTINGS_MSG
+        text = UPDATED_SETTINGS_MSG,
+        reply_markup = ReplyKeyboardRemove()
     )
 
 async def settings_riders(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -421,6 +514,8 @@ async def settings_buses(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     res = cur.execute(f"SELECT MAX(bus_id) FROM buses")
     bus_id = res.fetchone()[0]
+    if bus_id == None:
+        bus_id = -1
 
     buses = update.message.text.split("\n")
 
@@ -430,6 +525,7 @@ async def settings_buses(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cur.execute(f"INSERT INTO buses VALUES \
                     ({bus_id + 1}, {chat_id}, '{bus}')")
         con.commit()
+        bus_id += 1
     old_buses = list(set(current_buses) - set(buses))
     for bus in old_buses: # Remove old buses
         cur.execute(f"DELETE FROM buses \
@@ -442,7 +538,8 @@ async def settings_buses(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Send message
     await context.bot.send_message(
         chat_id = chat_id,
-        text = UPDATED_SETTINGS_MSG
+        text = UPDATED_SETTINGS_MSG,
+        reply_markup = ReplyKeyboardRemove()
     )
 
     return SELECT
@@ -783,8 +880,11 @@ async def manage_close(update: Update, context: ContextTypes.DEFAULT_TYPE, messa
                                )
     
     # Notif message
-    await context.bot.send_message(chat_id = target_chat_id,
-                                   text = CLOSE_NOTIF_MSG)
+    await context.bot.send_message(
+        chat_id = target_chat_id,
+        text = CLOSE_NOTIF_MSG,
+        reply_markup = ReplyKeyboardRemove()
+    )
 
 async def manage_reopen(update: Update, context: ContextTypes.DEFAULT_TYPE, message_id):
     """
@@ -799,8 +899,11 @@ async def manage_reopen(update: Update, context: ContextTypes.DEFAULT_TYPE, mess
                                )
     
     # Notif message
-    await context.bot.send_message(chat_id = target_chat_id,
-                                   text = REOPEN_NOTIF_MSG)
+    await context.bot.send_message(
+        chat_id = target_chat_id,
+        text = REOPEN_NOTIF_MSG,
+        reply_markup = ReplyKeyboardRemove(),
+    )
 
 async def manage_end(update: Update, context: ContextTypes.DEFAULT_TYPE, message_id):
     """Ends registration"""
@@ -819,8 +922,11 @@ async def manage_end(update: Update, context: ContextTypes.DEFAULT_TYPE, message
                                )
     
     # Notif message
-    await context.bot.send_message(chat_id = target_chat_id,
-                                   text = END_NOTIF_MSG)
+    await context.bot.send_message(
+        chat_id = target_chat_id,
+        text = END_NOTIF_MSG,
+        reply_markup = ReplyKeyboardRemove()
+    )
     
     # Connect to DB
     con = sqlite3.connect(f"{DB_FILEPATH}/rsnbusbot.db")
@@ -899,8 +1005,22 @@ async def manage_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE, mess
     # Notif message
     await context.bot.send_message(
         chat_id = target_chat_id,
-        text = CANCEL_NOTIF_MSG
+        text = CANCEL_NOTIF_MSG,
+        reply_markup = ReplyKeyboardRemove()
     )
+
+manage_book_handler = ConversationHandler(
+    entry_points = [CommandHandler("manage", manage_command)],
+    states = {
+        BOOK_ID: [MessageHandler(filters.Regex(r"^[0-9]+$"), manage_book_id),
+                  MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
+        FUNCTION: [MessageHandler(filters.Regex(r"^(Close|Reopen|End|Cancel)$"), manage_function),
+                   MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
+        ConversationHandler.TIMEOUT: [MessageHandler(filters.ALL, timeout)],
+    },
+    fallbacks = [CommandHandler("cancel", cancel)],
+    conversation_timeout = 60,
+)
 
 @permissions_factory("service")
 @restricted
@@ -915,13 +1035,34 @@ async def cancel_book_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     date = datetime.today() + timedelta(1)
     date = date.strftime("%d %b %y")
 
-    # Update overwrite data
-    chat_data["overwrite"][date] = False
-    payload = {
-        chat_id: chat_data
-    }
-    context.bot_data.update(payload)
-    print(context.bot_data)
+    # # Update overwrite data
+    # chat_data["overwrite"][date] = False
+    # payload = {
+    #     chat_id: chat_data
+    # }
+    # context.bot_data.update(payload)
+    # print(context.bot_data)
+
+    # Connect to DB schedule
+    con = sqlite3.connect(f"{DB_FILEPATH}/rsnbusbot.db")
+    cur = con.cursor()
+
+    # Fetch all bus_ids
+    res = cur.execute("SELECT bus_id FROM buses \
+                      WHERE chat_id={chat_id}")
+    bus_ids = res.fetchall()
+    bus_ids = [i[0] for i in bus_ids]
+
+    # Add schedule entries
+    for i in bus_ids:
+        cur.execute(f"INSERT INTO schedule VALUES \
+                    ({i}, '{date}', '{date}', 0)")
+        con.commit()
+    
+    con.close()
+
+    # Clean schedule
+    await clean_schedule()
 
     # Notif Message
     text = f"Booking cancelled for {date}"
@@ -942,13 +1083,34 @@ async def uncancel_book_command(update: Update, context: ContextTypes.DEFAULT_TY
     dt = datetime.today() + timedelta(1)
     date = dt.strftime("%d %b %y")
 
-    # Update overwrite data
-    chat_data["overwrite"][date]
-    payload = {
-        chat_id: chat_data
-    }
-    context.bot_data.update(payload)
-    print(context.bot_data)
+    # # Update overwrite data
+    # chat_data["overwrite"][date]
+    # payload = {
+    #     chat_id: chat_data
+    # }
+    # context.bot_data.update(payload)
+    # print(context.bot_data)
+
+    # Connect to DB schedule
+    con = sqlite3.connect(f"{DB_FILEPATH}/rsnbusbot.db")
+    cur = con.cursor()
+
+    # Fetch all bus_ids
+    res = cur.execute("SELECT bus_id FROM buses \
+                      WHERE chat_id={chat_id}")
+    bus_ids = res.fetchall()
+    bus_ids = [i[0] for i in bus_ids]
+
+    # Add schedule entries
+    for i in bus_ids:
+        cur.execute(f"INSERT INTO schedule VALUES \
+                    ({i}, '{date}', '{date}', 1)")
+        con.commit()
+    
+    con.close()
+
+    # Clean schedule
+    await clean_schedule()
 
     # Notif Message
     text = f"Booking uncancelled for {date}"
@@ -957,64 +1119,300 @@ async def uncancel_book_command(update: Update, context: ContextTypes.DEFAULT_TY
         text = text
     )
 
+
+BUS_ID_VIEW = 8
+
+@permissions_factory("admin")
+@restricted
+async def view_schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    View the schedule for the bus
+    """
+    chat_id = update.effective_chat.id
+
+    await context.bot.send_message(
+        chat_id = chat_id,
+        text = VIEW_SCHEDULE_MSG,
+    )
+
+    return BUS_ID_VIEW
+
+async def view_schedule_bus_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Shows the schedule for the selected bus ID
+    """
+    chat_id = update.effective_chat.id
+
+    # Get the bus ID
+    bus_id = int(update.message.text)
+
+    # Connect to DB
+    con = sqlite3.connect(f"{DB_FILEPATH}/rsnbusbot.db")
+    cur = con.cursor()
+
+    # Get schedule
+    res = cur.execute(f"SELECT start_date, end_date, status FROM schedule \
+                      WHERE bus_id={bus_id}")
+    schedule = res.fetchall()
+
+    con.close()
+
+    # Print the message
+    text = f"Here is the schedule for bus {bus_id}:\n"
+    for i in schedule:
+        status = "RUNNING"
+        if i[2] == 1:
+            status = "CANCELLED"
+        if i[0] == i[1]:
+            text = f"{text}\n{i[0]} {status}"
+        else:
+            text = f"{text}\n{i[0]}-{i[1]} {status}"
+    
+    await context.bot.send_message(
+        chat_id = chat_id,
+        text = text
+    )
+
+    return ConversationHandler.END
+
+view_schedule_handler = ConversationHandler(
+    entry_points = [CommandHandler("view_schedule", view_schedule_command)],
+    states = {
+        BUS_ID_VIEW: [MessageHandler(filters.Regex(r"^[0-9]$"), view_schedule_bus_id),
+                      MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
+        ConversationHandler.TIMEOUT: [MessageHandler(filters.ALL, timeout)]
+    },
+    fallbacks = [CommandHandler("cancel", cancel)],
+    conversation_timeout = 60
+)
+
+BUS_ID, OVERWRITE, DATES = range(9, 12)
+
+@permissions_factory("admin")
+@restricted
+async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Cancel / book buses for selected periods
+    Selects bus ID to schedule
+    """
+    chat_id = update.effective_chat.id
+
+    await context.bot.send_message(
+        chat_id = chat_id,
+        text = SCHEDULE_MSG,
+    )
+
+    return BUS_ID
+
+async def schedule_bus_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Selects function to overwrite with - cancel (0) / book (1)
+    """
+    chat_id = update.effective_chat.id 
+
+    # Get the bus id
+    bus_id = int(update.message.text)
+
+    # Check whether bus id is valid
+    # Connect to DB
+    con = sqlite3.connect(f"{DB_FILEPATH}/rsnbusbot.db")
+    cur = con.cursor()
+
+    # Get all bus ids
+    res = cur.execute("SELECT bus_id FROM buses")
+    bus_ids = res.fetchall()
+    bus_ids = [i[0] for i in bus_ids]
+
+    con.close()
+
+    if bus_id not in bus_ids:
+        await context.bot.send_message(
+            chat_id = chat_id,
+            text = INVALID_BUS_ID_MSG
+        )
+
+        return BUS_ID
+    
+    context.user_data["bus_id"] = bus_id
+    print(context.user_data)
+    
+    buttons = [[
+        KeyboardButton("Book"),
+        KeyboardButton("Cancel")
+    ]]
+    reply_markup = ReplyKeyboardMarkup(buttons)
+    await context.bot.send_message(
+        chat_id = chat_id,
+        text = SCHEDULE_FUNCTION_MSG,
+        reply_markup = reply_markup
+    )
+
+    return OVERWRITE
+
+async def schedule_function(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Gets the date ranges for the forced booking / cancellation.
+    """
+    chat_id = update.effective_chat.id
+
+    selection = update.message.text
+    context.user_data["overwrite"] = selection
+    print(context.user_data)
+
+    await context.bot.send_message(
+        chat_id = chat_id,
+        text = SCHEDULE_DATES_MSG,
+        reply_markup = ReplyKeyboardRemove()
+    )
+    
+    return DATES
+
+async def schedule_dates(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Updates the schedule table.
+    """
+    chat_id = update.effective_chat.id
+
+    dates = update.message.text
+    date_ranges = dates.split("\n")
+
+    # Get previous conversation choices
+    bus_id = context.user_data["bus_id"]
+    overwrite = context.user_data["overwrite"]
+
+    status = None
+    if overwrite == "Book":
+        status = 0
+    elif overwrite == "Cancel":
+        status = 1
+
+    # Connect to DB
+    con = sqlite3.connect(f"{DB_FILEPATH}/rsnbusbot.db")
+    cur = con.cursor()
+
+    for i in date_ranges:
+        if "-" in i: # range
+            date_range = i.split("-")
+            start_date, end_date = date_range[0], date_range[1]
+            try:
+                start = datetime.strptime(date_range[0], "%d%m%y")
+                end = datetime.strptime(date_range[1], "%d%m%y")
+                if start >= end:
+                    await context.bot.send_message(
+                        chat_id = chat_id,
+                        text = INVALID_SCHEDULE_DATE_MSG
+                    )
+                    return DATES
+            except Exception:
+                await context.bot.send_message(
+                        chat_id = chat_id,
+                        text = INVALID_SCHEDULE_DATE_MSG
+                )
+                return DATES
+            cur.execute(f"INSERT INTO schedule VALUES \
+                        ({bus_id}, '{start_date}', '{end_date}', {status})")
+            con.commit()
+        else: # single
+            try:
+                date = datetime.strptime(i, "%d%m%y")
+            except Exception:
+                await context.bot.send_message(
+                        chat_id = chat_id,
+                        text = INVALID_SCHEDULE_DATE_MSG
+                )
+                return DATES
+            cur.execute(f"INSERT INTO schedule VALUES \
+                        ({bus_id}, '{i}', '{i}', {status})")
+            con.commit()
+
+    con.close()
+
+    await clean_schedule(bus_ids = [bus_id])
+
+    await context.bot.send_message(
+        chat_id = chat_id,
+        text = UPDATED_SCHEDULE_MSG
+    )
+
+    del context.user_data["bus_id"]
+    del context.user_data["overwrite"]
+    print(context.user_data)
+
+    return ConversationHandler.END
+
+schedule_handler = ConversationHandler(
+    entry_points = [CommandHandler("schedule", schedule_command)],
+    states = {
+        BUS_ID: [MessageHandler(filters.Regex(r"^[0-9]+$"), schedule_bus_id),
+                MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
+        OVERWRITE: [MessageHandler(filters.Regex(r"^(Book|Cancel)$"), schedule_function),
+                    MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
+        DATES: [MessageHandler(filters.Regex(r"^(((0[1-9]|[12]\d|3[01])(0[1-9]|1[0-2])(\d{2}))(-((0[1-9]|[12]\d|3[01])(0[1-9]|1[0-2])(\d{2})))*)(\n((0[1-9]|[12]\d|3[01])(0[1-9]|1[0-2])(\d{2}))(-((0[1-9]|[12]\d|3[01])(0[1-9]|1[0-2])(\d{2})))*)*$"), schedule_dates),
+                MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
+        ConversationHandler.TIMEOUT: [MessageHandler(filters.ALL, timeout)]},
+    fallbacks = [CommandHandler("cancel", cancel)],
+    conversation_timeout = 60
+)
+
 async def daily_booking(context: ContextTypes.DEFAULT_TYPE):
     """
     Initiates / cancels daily booking for all chats.
+    Cleans up the schedule.
     """
     # Connect to DB
     con = sqlite3.connect(f"{DB_FILEPATH}/rsnbusbot.db")
     cur = con.cursor()
 
     # Get all buses to send booking messages for
-    res = cur.execute("SELECT chat_id, time FROM buses")
+    res = cur.execute("SELECT bus_id, chat_id, time FROM buses")
     buses = res.fetchall()
 
-    con.close()
-
-    dt = datetime.today() + timedelta(1)
-    date = dt.strftime("%d %b %y")
+    date = datetime.today() + timedelta(1)
     
     for bus in buses:
-        chat_id, t = bus[0], bus[1]
+        bus_id, chat_id, t = bus[0], bus[1], bus[2]
 
         if chat_id not in context.bot_data.keys():
             print(f"Unable to send bookings messages to chat {chat_id} as bot was not started.")
             continue
-        chat_data = context.bot_data[chat_id]
 
         # Check for any overwrites
-        overwrites = chat_data["overwrite"]
-        if date in overwrites:
-            # Save the overwrite temporarily
-            flag = overwrites[date]
-            
-            # Remove overwrite once it has been triggered
-            del overwrites[date]
-            chat_data["overwrite"] = overwrites
-            payload = {
-                chat_id: chat_data
-            }
-            context.bot_data.update(payload)
-            print(context.bot_data)
+        res = cur.execute(f"SELECT start_date, end_date, status FROM schedule \
+                          WHERE bus_id={bus_id}")
+        overwrites = res.fetchall()
 
-            # Sends appropriate booking messages
-            if flag:
-                await book_job(context, chat_id, t)
-            else:
-                await context.bot.send_message(
-                    chat_id = chat_id,
-                    text = OVERWRITE_FALSE_MSG
-                )
+        flag = False
+        for i in overwrites:
+            start_date, end_date, status = datetime.strptime(i[0], "%d%m%y"), datetime.strptime(i[1], "%d%m%y"), i[2]
+            if date.date() >= start_date.date() and date.date() <= end_date.date():
+                print(status)
+                if status == 0:
+                    await book_job(context, chat_id, t)
+                else:
+                    print(False)
+                    await context.bot.send_message( # TODO: Error message says the bus time will not be running
+                        chat_id = chat_id,
+                        text = f"Dear all, bus {bus_id} will not be running tomorrow." # OVERWRITE_FALSE_MSG
+                    )
 
-            return
-        
+                flag = True
+                break
+
+        if flag:
+            continue
+              
         # Check for weekends
-        # day = dt.weekday()
-        # if day == 5 or day == 6: # Don't send if the next day is Sat or Sun
-        #     return
+        day = date.weekday()
+        if day == 5 or day == 6: # Don't send if the next day is Sat or Sun
+            return
         
         # Send if it's a regular day
         await book_job(context, chat_id, t)
+
+    con.close()
+
+    # Clean the schedule
+    await clean_schedule()
 
 async def book_job(context: ContextTypes.DEFAULT_TYPE, chat_id, t):
     """
@@ -1119,21 +1517,8 @@ async def end_book_job(context: ContextTypes.DEFAULT_TYPE):
         
     con.close()
     
-manage_book_handler = ConversationHandler(
-    entry_points = [CommandHandler("manage", manage_command)],
-    states = {
-        BOOK_ID: [MessageHandler(filters.Regex(r"^[0-9]+$"), manage_book_id),
-                  MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
-        FUNCTION: [MessageHandler(filters.Regex(r"^(Close|Reopen|End|Cancel)$"), manage_function),
-                   MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
-        ConversationHandler.TIMEOUT: [MessageHandler(filters.ALL, timeout)],
-    },
-    fallbacks = [CommandHandler("cancel", cancel)],
-    conversation_timeout = 60,
-)
-
 ## BROADCAST / NOTIFICATION
-CONFIRM, SENT = range(8, 10) # States for broadcast conversation handler
+CONFIRM, SENT = range(12, 14) # States for broadcast conversation handler
 
 @permissions_factory("admin")
 @restricted
@@ -1222,20 +1607,6 @@ async def broadcast_sent(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return CONFIRM
 
-async def cancel_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Sends a message to indicate broadcast has been cancelled.
-    """
-    chat_id = update.effective_chat.id
-
-    # Send message
-    await context.bot.send_message(
-        chat_id = chat_id,
-        text = BROADCAST_CANCEL_MSG
-    )
-
-    return ConversationHandler.END
-
 broadcast_handler = ConversationHandler(
     entry_points=[CommandHandler("broadcast", broadcast_command)],
     states = {
@@ -1245,7 +1616,7 @@ broadcast_handler = ConversationHandler(
                  MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
         ConversationHandler.TIMEOUT: [MessageHandler(filters.ALL, timeout)],
     },
-    fallbacks = [CommandHandler("cancel", cancel_broadcast)],
+    fallbacks = [CommandHandler("cancel", cancel)],
     conversation_timeout = 60,
 )
 

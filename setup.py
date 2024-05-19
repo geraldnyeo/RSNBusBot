@@ -37,4 +37,11 @@ def setup_db():
                     riders INTEGER NOT NULL\
                     )") # Create ridership table
     
+    res = cur.execute("CREATE TABLE IF NOT EXISTS schedule (\
+                      bus_id INTEGER NOT NULL, \
+                      start_date TEXT NOT NULL, \
+                      end_date TEXT NOT NULL, \
+                      status INTEGER NOT NULL\
+                      )") # Create schedule table
+    
     con.close()
