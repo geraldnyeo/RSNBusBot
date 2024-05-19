@@ -63,21 +63,21 @@ async def lifespan(app: FastAPI):
         await ptb.stop()
 
 # Create the FastAPI application
-app = FastAPI(lifespan=lifespan) # Do not run FastAPI code for local dev using polling
+# app = FastAPI(lifespan=lifespan) # Do not run FastAPI code for local dev using polling
 
-@app.get("/")
-async def index():
-    """Landing page for the bot."""
-    # TODO FUTURE: Add a basic single static page here to explain the bot!
-    return "Hello"
+# @app.get("/")
+# async def index():
+#     """Landing page for the bot."""
+#     # TODO FUTURE: Add a basic single static page here to explain the bot!
+#     return "Hello"
 
-@app.post("/webhook")
-async def process_update(request: Request):
-    """Updates PTB application when post request received at webhook"""
-    req = await request.json()
-    update = Update.de_json(req, ptb.bot)
-    await ptb.process_update(update)
-    return Response(status_code = HTTPStatus.OK)
+# @app.post("/webhook")
+# async def process_update(request: Request):
+#     """Updates PTB application when post request received at webhook"""
+#     req = await request.json()
+#     update = Update.de_json(req, ptb.bot)
+#     await ptb.process_update(update)
+#     return Response(status_code = HTTPStatus.OK)
 
 # Set up PTB handlers
 # Commands (General)
@@ -92,6 +92,10 @@ ptb.add_handler(CallbackQueryHandler(booking_cb_handler, r"^(book|cancel)$")) # 
 ptb.add_handler(manage_book_handler)
 ptb.add_handler(CommandHandler('cancel_book', cancel_book_command))
 ptb.add_handler(CommandHandler('uncancel_book', uncancel_book_command))
+
+# Commands (Scheduling)
+ptb.add_handler(view_schedule_handler)
+ptb.add_handler(schedule_handler)
 
 # Commands (Broadcasting)
 ptb.add_handler(broadcast_handler)
@@ -115,9 +119,9 @@ ptb.job_queue.run_daily(daily_booking,
                         time=time(hour=17, minute=30, second=0, tzinfo=pytz.timezone(TIMEZONE)), 
                         days=(0, 1, 2, 3, 4, 5, 6)) # MUST be 0 to 6 to work
 ptb.job_queue.run_daily(end_book_job,
-                        time=time(hour=23, minute=59, second=59, tzinfo=pytz.timezone(TIMEZONE)),
+                        time=time(hour=22, minute=00, second=00, tzinfo=pytz.timezone(TIMEZONE)),
                         days=(0, 1, 2, 3, 4, 5, 6))
 
 # Polling, for dev purposes
-# print('Polling...')
-# ptb.run_polling(poll_interval=1, allowed_updates=Update.ALL_TYPES)
+print('Polling...')
+ptb.run_polling(poll_interval=1, allowed_updates=Update.ALL_TYPES)
