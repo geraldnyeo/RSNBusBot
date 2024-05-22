@@ -104,6 +104,7 @@ ptb.add_handler(CommandHandler('notify_late_all', lambda u, c: notify_late(u, c,
 
 # Commands (Data)
 ptb.add_handler(CommandHandler('view_data_summary', view_data_summary_command))
+ptb.add_handler(edit_db_handler)
 
 # Messages
 # For later development

@@ -83,6 +83,10 @@ BROADCAST_CONFIRM_MSG = """Please confirm that this is the message you want to b
 BROADCAST_SENT_MSG = """Message has been broadcasted!"""
 NOTIFY_LATE_MSG = """Dear all, the bus at 0700hrs will be late. Please inform your respective units of the delay and to seek their understanding. Thank you"""
 
+EDIT_DB_MSG = """Please enter the command to execute:"""
+
+CONVERSATION_ENTER_PASSWORD_MSG = """Please enter the bot password:"""
+CONVERSATION_INVALID_PASSWORD_MSG = """Invalid password, conversation exited."""
 CONVERSATION_INVALID_MSG = """Invalid response."""
 CONVERSATION_CANCEL_MSG = """Conversation exited."""
 CONVERSATION_TIMEOUT_MSG = """Conversation timeout reached, conversation exited."""
