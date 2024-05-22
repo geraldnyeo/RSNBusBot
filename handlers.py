@@ -28,6 +28,7 @@ from functools import wraps, reduce
 from constants import * # Ensure constants.py in same directory
 
 DB_FILEPATH = os.environ['DB_FILEPATH']
+PASSWORD = os.environ['PASSWORD']
 
 ### HELPER FUNCTIONS
 async def get_chat_type(context, chat_id):
@@ -85,6 +86,30 @@ def restricted(func):
             return
     
     return wrapped
+
+# Password conversation lock
+PW = 1000
+async def password(update: Update, context: ContextTypes.DEFAULT_TYPE, state, text):
+    """
+    Password protection for certain commands
+    """
+    chat_id = update.effective_chat.id
+
+    pw = update.message.text
+    if pw != PASSWORD:
+        await context.bot.send_message(
+            chat_id = chat_id,
+            text = CONVERSATION_INVALID_PASSWORD_MSG
+        )
+
+        return ConversationHandler.END
+
+    await context.bot.send_message(
+        chat_id = chat_id,
+        text = text
+    )
+
+    return state
 
 # Invalid response catcher
 async def invalid(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -324,7 +349,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         HELP_MSG
     )
 
-@permissions_factory("admin / service")
+@permissions_factory("admin | service")
 @restricted
 async def view_settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -367,7 +392,7 @@ async def view_settings_command(update: Update, context: ContextTypes.DEFAULT_TY
 
 SELECT, RIDERS, PICKUP, DESTINATION, CHAT, BUSES = range(0, 6) # states for settings conversation handler
 
-@permissions_factory("admin / service")
+@permissions_factory("admin | service")
 @restricted
 async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -384,11 +409,11 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = ReplyKeyboardMarkup(buttons, one_time_keyboard=True)
     await context.bot.send_message(
         chat_id = update.effective_chat.id,
-        text = SETTINGS_MSG,
+        text = CONVERSATION_ENTER_PASSWORD_MSG,
         reply_markup = reply_markup
     )
         
-    return SELECT
+    return PW
 
 async def settings_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Sends prompt messages once a setting to change is selected."""
@@ -547,6 +572,8 @@ async def settings_buses(update: Update, context: ContextTypes.DEFAULT_TYPE):
 settings_handler = ConversationHandler(
     entry_points=[CommandHandler("settings", settings_command)],
     states = {
+        PW: [MessageHandler(filters.TEXT, lambda u, c: password(u, c, SELECT, SETTINGS_MSG)),
+             MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
         SELECT: [MessageHandler(filters.Regex(r"^(Max Riders|Pickup Location|Destination|Chat Type|Buses)$"), settings_select),
                  MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
         RIDERS: [MessageHandler(filters.Regex(r"^[0-9]+$"), settings_riders),
@@ -1620,7 +1647,7 @@ broadcast_handler = ConversationHandler(
     conversation_timeout = 60,
 )
 
-@permissions_factory("service")
+@permissions_factory("admin | service")
 @restricted
 async def notify_late(update: Update, context: ContextTypes.DEFAULT_TYPE, all_chats=False):
     """Send a notification message to notify users of late buses."""
@@ -1687,6 +1714,69 @@ async def view_data_summary_command(update: Update, context: ContextTypes.DEFAUL
         text = text
     )
 
+QUERY = 14
+
+@permissions_factory("admin")
+@restricted
+async def edit_db_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Allows direct access to DB through sql commands
+    Only give access to certain members of admin
+    """
+    chat_id = update.effective_chat.id
+
+    await context.bot.send_message(
+        chat_id = chat_id,
+        text = CONVERSATION_ENTER_PASSWORD_MSG
+    )
+
+    return PW
+
+async def edit_db_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Executes whatever command is entered by the user, so
+    DO NOT USE THIS FUNCTION UNLESS ABSOLUTELY NECESSARY
+    """
+    chat_id = update.effective_chat.id
+
+    query = update.message.text
+
+    # Connect to DB
+    con = sqlite3.connect(f"{DB_FILEPATH}/rsnbusbot.db")
+    cur = con.cursor()
+
+    # Attempt to execute
+    try:
+        res = cur.execute(query)
+        con.commit()
+        response = res.fetchall()
+    except Exception as e:
+        response = str(e)
+    
+    con.close()
+
+    # Output
+    await context.bot.send_message(
+        chat_id = chat_id,
+        text = response
+    )
+
+    return ConversationHandler.END
+
+
+edit_db_handler = ConversationHandler(
+    entry_points = [CommandHandler("edit_db", edit_db_command)],
+    states = {
+        PW: [MessageHandler(filters.TEXT, lambda u, c: password(u, c, QUERY, EDIT_DB_MSG)),
+                MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
+        QUERY: [MessageHandler(filters.TEXT, edit_db_query),
+                MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
+        ConversationHandler.TIMEOUT: [MessageHandler(filters.ALL, timeout)]
+    },
+    fallbacks = [CommandHandler("cancel", cancel)],
+    conversation_timeout = 60
+)
+
 
 ### OTHER EVENTS
 async def migrate_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1713,6 +1803,10 @@ async def migrate_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     con.commit()
 
     cur.execute(f"UPDATE ridership SET chat_id={new_chat_id} \
+                WHERE chat_id={old_chat_id}")
+    con.commit()
+
+    cur.execute(f"UPDATE schedule SET chat_id={new_chat_id} \
                 WHERE chat_id={old_chat_id}")
     con.commit()
 
