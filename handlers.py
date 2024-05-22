@@ -313,7 +313,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id: { # TODO: Swap to using chat_data rather than bot_data
                 "initialized": False,
                 "bookings": {},
-                "overwrite": {}
             }
         }
         context.bot_data.update(payload)
@@ -409,11 +408,11 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = ReplyKeyboardMarkup(buttons, one_time_keyboard=True)
     await context.bot.send_message(
         chat_id = update.effective_chat.id,
-        text = CONVERSATION_ENTER_PASSWORD_MSG,
+        text = SETTINGS_MSG,
         reply_markup = reply_markup
     )
         
-    return PW
+    return SELECT
 
 async def settings_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Sends prompt messages once a setting to change is selected."""
@@ -572,8 +571,6 @@ async def settings_buses(update: Update, context: ContextTypes.DEFAULT_TYPE):
 settings_handler = ConversationHandler(
     entry_points=[CommandHandler("settings", settings_command)],
     states = {
-        PW: [MessageHandler(filters.TEXT, lambda u, c: password(u, c, SELECT, SETTINGS_MSG)),
-             MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
         SELECT: [MessageHandler(filters.Regex(r"^(Max Riders|Pickup Location|Destination|Chat Type|Buses)$"), settings_select),
                  MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
         RIDERS: [MessageHandler(filters.Regex(r"^[0-9]+$"), settings_riders),
@@ -1062,14 +1059,6 @@ async def cancel_book_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     date = datetime.today() + timedelta(1)
     date = date.strftime("%d %b %y")
 
-    # # Update overwrite data
-    # chat_data["overwrite"][date] = False
-    # payload = {
-    #     chat_id: chat_data
-    # }
-    # context.bot_data.update(payload)
-    # print(context.bot_data)
-
     # Connect to DB schedule
     con = sqlite3.connect(f"{DB_FILEPATH}/rsnbusbot.db")
     cur = con.cursor()
@@ -1109,14 +1098,6 @@ async def uncancel_book_command(update: Update, context: ContextTypes.DEFAULT_TY
 
     dt = datetime.today() + timedelta(1)
     date = dt.strftime("%d %b %y")
-
-    # # Update overwrite data
-    # chat_data["overwrite"][date]
-    # payload = {
-    #     chat_id: chat_data
-    # }
-    # context.bot_data.update(payload)
-    # print(context.bot_data)
 
     # Connect to DB schedule
     con = sqlite3.connect(f"{DB_FILEPATH}/rsnbusbot.db")
