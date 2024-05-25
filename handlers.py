@@ -447,10 +447,10 @@ async def settings_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup = ReplyKeyboardMarkup(buttons, one_time_keyboard=True)
             await context.bot.send_message(
                 chat_id = chat_id,
-                text = CHAT_SETTING_MSG,
+                text = CONVERSATION_ENTER_PASSWORD_MSG,
                 reply_markup = reply_markup
             )
-            return CHAT
+            return PW
         case "Buses":
             await context.bot.send_message(
                 chat_id = chat_id,
@@ -579,6 +579,8 @@ settings_handler = ConversationHandler(
                  MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
         DESTINATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, settings_destination),
                  MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
+        PW: [MessageHandler(filters.TEXT, lambda u, c: password(u, c, CHAT, CHAT_SETTING_MSG)),
+             MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
         CHAT: [MessageHandler(filters.Regex(r"^(Admin|Service)$"), settings_chat),
                  MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
         BUSES: [MessageHandler(filters.Regex(r"^(([01]\d|2[0-3])([0-5]\d))(\n([01]\d|2[0-3])([0-5]\d))*$"), settings_buses),
@@ -961,9 +963,9 @@ async def manage_end(update: Update, context: ContextTypes.DEFAULT_TYPE, message
                       FROM settings WHERE chat_id={target_chat_id}")
     data = res.fetchone()
     pickup, destination = data[0], data[1]
+    time = chat_data["bookings"][message_id]["time"]
 
-    booking_token = f"Your registration for the shuttle bus from \
-{pickup} to {destination} for {date} has been confirmed."
+    booking_token = f"Your registration for the shuttle bus from {pickup} to {destination} for {date} at time {time} has been confirmed."
     for user in chat_data["bookings"][message_id]["users"]:
         try:
             await context.bot.send_message(
@@ -1482,6 +1484,10 @@ async def end_book_job(context: ContextTypes.DEFAULT_TYPE):
         if chat_type == "Admin":
             continue
 
+        if not chat_data["bookings"]: # Will return false if dictionary is empty
+            print("No bookings")
+            continue
+
         for message_id in chat_data["bookings"].keys():
 
             # Remove reply_markup so users cannot reply
@@ -1492,7 +1498,7 @@ async def end_book_job(context: ContextTypes.DEFAULT_TYPE):
                                     )
             
             # Update database
-            book_id = chat_data["bookings"][message_id]["bookings"]
+            book_id = chat_data["bookings"][message_id]["book_id"]
             bookings = chat_data["bookings"][message_id]["bookings"]
             cur.execute(f"UPDATE ridership SET \
                         riders={bookings} \
@@ -1500,7 +1506,8 @@ async def end_book_job(context: ContextTypes.DEFAULT_TYPE):
             con.commit()
                 
             # Send tokens
-            booking_token = f"Your registration for the shuttle bus from {pickup} to {destination} for {date} has been confirmed."
+            time = chat_data["bookings"][message_id]["time"]
+            booking_token = f"Your registration for the shuttle bus from {pickup} to {destination} for {date} at time {time} has been confirmed."
             for user in chat_data["bookings"][message_id]["users"]:
                 try:
                     await context.bot.send_message(

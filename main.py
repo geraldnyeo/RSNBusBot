@@ -1,5 +1,5 @@
 """
-RSNBusBot v1.2.0
+RSNBusBot v1.2.1
 """
 
 ### IMPORTS
