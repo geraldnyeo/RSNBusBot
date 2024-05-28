@@ -127,6 +127,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Cancel fallback function for all Conversation Handlers
     """
+    print("CONVERSATION: cancel")
+
     chat_id = update.effective_chat.id
 
     # Send message
@@ -143,6 +145,7 @@ async def timeout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Timeout function for all Conversation Handlers
     """
+    print("CONVERSATION: timeout")
     chat_id = update.effective_chat.id
 
     # Send message
@@ -157,6 +160,8 @@ async def clean_schedule(bus_ids = None):
     """
     Organise the schedule so that repeats are avoided.
     """
+    print("Cleaning schedule...")
+
     # Connect to DB
     con = sqlite3.connect(f"{DB_FILEPATH}/rsnbusbot.db")
     cur = con.cursor()
@@ -164,6 +169,7 @@ async def clean_schedule(bus_ids = None):
     # Get all bus IDs
     if bus_ids == None:
         res = cur.execute("SELECT bus_id FROM buses")
+        bus_ids = res.fetchall()
         bus_ids = [i[0] for i in bus_ids]
 
     for bus_id in bus_ids:
@@ -242,7 +248,7 @@ async def clean_schedule(bus_ids = None):
                         )")
             con.commit()
         
-        con.close()
+    con.close()
 
 
 ### COMMANDS
@@ -257,6 +263,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
      - Database Configuration
      - Setup Ephermeral Data (context.bot_data)
     """
+    print("COMMAND: start")
+
     chat_id = update.effective_chat.id
 
     # Message for Users
@@ -332,6 +340,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Inform the user about the bot's available commands.
     """
+    print("COMMAND: help")
+
     chat_id = update.effective_chat.id
 
     # Message for Users
@@ -344,8 +354,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Message for Groups
-    await update.message.send_message(
-        HELP_MSG
+    await context.bot.send_message(
+        chat_id = chat_id,
+        text = HELP_MSG
     )
 
 @permissions_factory("admin | service")
@@ -354,6 +365,8 @@ async def view_settings_command(update: Update, context: ContextTypes.DEFAULT_TY
     """
     Shows users the current settings.
     """
+    print("COMMAND: view settings")
+
     chat_id = update.effective_chat.id
 
     # Connect to DB
@@ -397,6 +410,8 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Settings Menu
     """
+    print("COMMAND: settings")
+
     # Send nessage
     buttons = [
         [KeyboardButton("Max Riders"),
@@ -674,6 +689,8 @@ async def book_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Sends a message to book shuttle bus slots.
     """
+    print("COMMAND: book")
+
     # TODO: Conversation handler for this command
     chat_id = update.effective_chat.id
     chat_data = context.bot_data[chat_id]
@@ -805,6 +822,8 @@ async def manage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
      - End
      - Cancel
     """
+    print("COMMAND: manage")
+
     chat_id = update.effective_chat.id
 
     # Send message
@@ -1054,59 +1073,21 @@ async def cancel_book_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     """
     Cancels automatic registration for the next day
     """
+    print("COMMAND: cancel book")
+
     # TODO: Replace this clause with call of booking cancellation for a range
     chat_id = update.effective_chat.id
-    chat_data = context.bot_data[chat_id]
 
     date = datetime.today() + timedelta(1)
-    date = date.strftime("%d %b %y")
+    datestr = date.strftime("%d %b %y")
+    date = date.strftime("%d%m%y")
 
     # Connect to DB schedule
     con = sqlite3.connect(f"{DB_FILEPATH}/rsnbusbot.db")
     cur = con.cursor()
 
     # Fetch all bus_ids
-    res = cur.execute("SELECT bus_id FROM buses \
-                      WHERE chat_id={chat_id}")
-    bus_ids = res.fetchall()
-    bus_ids = [i[0] for i in bus_ids]
-
-    # Add schedule entries
-    for i in bus_ids:
-        cur.execute(f"INSERT INTO schedule VALUES \
-                    ({i}, '{date}', '{date}', 0)")
-        con.commit()
-    
-    con.close()
-
-    # Clean schedule
-    await clean_schedule()
-
-    # Notif Message
-    text = f"Booking cancelled for {date}"
-    await context.bot.send_message(
-        chat_id = chat_id,
-        text = text
-    )
-
-@permissions_factory("service")
-@restricted
-async def uncancel_book_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Uncancels the next day's booking by overwriting the next day to True.
-    """
-    chat_id = update.effective_chat.id
-    chat_data = context.bot_data[chat_id]
-
-    dt = datetime.today() + timedelta(1)
-    date = dt.strftime("%d %b %y")
-
-    # Connect to DB schedule
-    con = sqlite3.connect(f"{DB_FILEPATH}/rsnbusbot.db")
-    cur = con.cursor()
-
-    # Fetch all bus_ids
-    res = cur.execute("SELECT bus_id FROM buses \
+    res = cur.execute(f"SELECT bus_id FROM buses \
                       WHERE chat_id={chat_id}")
     bus_ids = res.fetchall()
     bus_ids = [i[0] for i in bus_ids]
@@ -1123,7 +1104,50 @@ async def uncancel_book_command(update: Update, context: ContextTypes.DEFAULT_TY
     await clean_schedule()
 
     # Notif Message
-    text = f"Booking uncancelled for {date}"
+    text = f"Booking cancelled for {datestr}"
+    await context.bot.send_message(
+        chat_id = chat_id,
+        text = text
+    )
+
+@permissions_factory("service")
+@restricted
+async def uncancel_book_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Uncancels the next day's booking by overwriting the next day to True.
+    """
+    print("COMMAND: uncancel book")
+
+    chat_id = update.effective_chat.id
+    chat_data = context.bot_data[chat_id]
+
+    dt = datetime.today() + timedelta(1)
+    datestr = dt.strftime("%d %b %y")
+    date = dt.strftime("%d%m%y")
+
+    # Connect to DB schedule
+    con = sqlite3.connect(f"{DB_FILEPATH}/rsnbusbot.db")
+    cur = con.cursor()
+
+    # Fetch all bus_ids
+    res = cur.execute(f"SELECT bus_id FROM buses \
+                      WHERE chat_id={chat_id}")
+    bus_ids = res.fetchall()
+    bus_ids = [i[0] for i in bus_ids]
+
+    # Add schedule entries
+    for i in bus_ids:
+        cur.execute(f"INSERT INTO schedule VALUES \
+                    ({i}, '{date}', '{date}', 0)")
+        con.commit()
+    
+    con.close()
+
+    # Clean schedule
+    await clean_schedule()
+
+    # Notif Message
+    text = f"Booking uncancelled for {datestr}"
     await context.bot.send_message(
         chat_id = chat_id,
         text = text
@@ -1138,6 +1162,8 @@ async def view_schedule_command(update: Update, context: ContextTypes.DEFAULT_TY
     """
     View the schedule for the bus
     """
+    print("COMMAND: view schedule")
+
     chat_id = update.effective_chat.id
 
     await context.bot.send_message(
@@ -1205,6 +1231,8 @@ async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     Cancel / book buses for selected periods
     Selects bus ID to schedule
     """
+    print("COMMAND: schedule")
+
     chat_id = update.effective_chat.id
 
     await context.bot.send_message(
@@ -1369,6 +1397,8 @@ async def daily_booking(context: ContextTypes.DEFAULT_TYPE):
     Initiates / cancels daily booking for all chats.
     Cleans up the schedule.
     """
+    print("DAILY BOOKING START")
+
     # Connect to DB
     con = sqlite3.connect(f"{DB_FILEPATH}/rsnbusbot.db")
     cur = con.cursor()
@@ -1399,7 +1429,6 @@ async def daily_booking(context: ContextTypes.DEFAULT_TYPE):
                 if status == 0:
                     await book_job(context, chat_id, t)
                 else:
-                    print(False)
                     await context.bot.send_message( # TODO: Error message says the bus time will not be running
                         chat_id = chat_id,
                         text = f"Dear all, bus {bus_id} will not be running tomorrow." # OVERWRITE_FALSE_MSG
@@ -1466,6 +1495,8 @@ async def end_book_job(context: ContextTypes.DEFAULT_TYPE):
     """
     Ends all registrations
     """
+    print("DAILY BOOKING END")
+
     # Connect to DB
     con = sqlite3.connect(f"{DB_FILEPATH}/rsnbusbot.db")
     cur = con.cursor()
@@ -1541,6 +1572,8 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Broadcast a message to every service chat.
     """
+    print("COMMAND: broadcast")
+
     chat_id = update.effective_chat.id
     
     # Send message
@@ -1639,6 +1672,7 @@ broadcast_handler = ConversationHandler(
 @restricted
 async def notify_late(update: Update, context: ContextTypes.DEFAULT_TYPE, all_chats=False):
     """Send a notification message to notify users of late buses."""
+    print("COMMAND: notify late")
 
     chat_id = update.effective_chat.id
     
@@ -1661,6 +1695,8 @@ async def view_data_summary_command(update: Update, context: ContextTypes.DEFAUL
     Sends a message displaying the ridership stats.
      - Average ridership / day for each service (overall for all bus timings)
     """
+    print("COMMAND: view data summary")
+
     chat_id = update.effective_chat.id
 
     # Connect to DB
@@ -1711,6 +1747,8 @@ async def edit_db_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     Allows direct access to DB through sql commands
     Only give access to certain members of admin
     """
+    print("COMMAND: edit DB")
+
     chat_id = update.effective_chat.id
 
     await context.bot.send_message(
@@ -1771,6 +1809,8 @@ async def migrate_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Handles migrations to another chat
     """
+    print("CHAT MIGRATED")
+
     old_chat_id = update.message.migrate_from_chat_id
     new_chat_id = update.message.chat.id
 
