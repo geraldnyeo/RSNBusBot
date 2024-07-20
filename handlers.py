@@ -318,8 +318,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id not in context.bot_data.keys():
         # Initialise the message data structure which the bot will be using.
         payload = {
-            chat_id: { # TODO: Swap to using chat_data rather than bot_data
-                "initialized": False,
+            chat_id: {
+                "initialized": True,
                 "bookings": {},
             }
         }
@@ -334,6 +334,33 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     # TODO: Setup constants conversation handler
+
+@permissions_factory("service | admin")
+@restricted
+async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Soft reset the bot if anything happens to its temporary state, so that it can continue running the next cycle.
+    """
+    print("COMMAND: reset")
+
+    chat_id = update.effective_chat.id
+
+    # Reset the chat data so nothing is inside
+    payload = {
+        chat_id: {
+            "initialized": True,
+            "bookings": {},
+        }
+    }
+    context.bot_data.update(payload)
+    print(context.bot_data)
+
+    # Send notification message
+    await context.bot.send_message(
+        chat_id = chat_id,
+        text = RESET_MSG
+    )
+
 
 @permissions_factory("user | service | admin")
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -402,7 +429,7 @@ async def view_settings_command(update: Update, context: ContextTypes.DEFAULT_TY
         text = text
     )
 
-SELECT, RIDERS, PICKUP, DESTINATION, CHAT, BUSES = range(0, 6) # states for settings conversation handler
+CHAT_ID, SELECT, RIDERS, PICKUP, DESTINATION, CHAT, BUSES = range(0, 7) # states for settings conversation handler
 
 @permissions_factory("admin | service")
 @restricted
@@ -412,22 +439,90 @@ async def settings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     print("COMMAND: settings")
 
-    # Send nessage
+    chat_id = update.effective_chat.id
+
+    # Connect to DB
+    con = sqlite3.connect(f"{DB_FILEPATH}/rsnbusbot.db")
+    cur = con.cursor()
+
+    # Check chat type
+    res = cur.execute(f"SELECT chat_type FROM settings WHERE chat_id={chat_id}")
+    chat_type = res.fetchone()[0]
+
+    if chat_type == "Service":
+        con.close()
+
+        context.user_data["target_chat_id"] = chat_id
+        print(context.user_data)
+
+        # Send message
+        buttons = [
+            [KeyboardButton("Max Riders"),
+            KeyboardButton("Pickup Location"),
+            KeyboardButton("Destination")],
+            [KeyboardButton("Chat Type"),
+            KeyboardButton("Buses")]
+        ]
+        reply_markup = ReplyKeyboardMarkup(buttons, one_time_keyboard=True)
+        await context.bot.send_message(
+            chat_id = chat_id,
+            text = SETTINGS_MSG,
+            reply_markup = reply_markup
+        )
+        
+        return SELECT
+    
+    if chat_type == "Admin":
+        res = cur.execute("SELECT chat_id, pickup, destination FROM settings \
+                          WHERE chat_type='Service'")
+        chats = res.fetchall()
+        con.close()
+        
+        text = "Please select a chat to edit:\n\n0: (current chat)"
+        chat_map = [chat_id]
+        for i, c in enumerate(chats, 1):
+            pickup, destination = c[1], c[2]
+            chat_map.append(c[0])
+            text = f"{text}\n{i}: {pickup} to {destination}"
+
+        context.user_data["chat_map"] = chat_map
+        print(context.user_data)
+        await context.bot.send_message(
+            chat_id = chat_id,
+            text = text
+        )
+
+        return CHAT_ID
+        
+
+async def settings_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """If chat is admin chat, select service chat to edit settings for."""
+    chat_id = update.effective_chat.id
+    chat_map = context.user_data["chat_map"]
+    del context.user_data["chat_map"]
+
+    selection = int(update.message.text)
+    target_chat_id = chat_map[selection]
+    context.user_data["target_chat_id"] = target_chat_id
+    print(context.user_data)
+
+    # Send message
     buttons = [
         [KeyboardButton("Max Riders"),
-         KeyboardButton("Pickup Location"),
-         KeyboardButton("Destination")],
+        KeyboardButton("Pickup Location"),
+        KeyboardButton("Destination")],
         [KeyboardButton("Chat Type"),
-         KeyboardButton("Buses")]
+        KeyboardButton("Buses")]
     ]
     reply_markup = ReplyKeyboardMarkup(buttons, one_time_keyboard=True)
     await context.bot.send_message(
-        chat_id = update.effective_chat.id,
+        chat_id = chat_id,
         text = SETTINGS_MSG,
         reply_markup = reply_markup
     )
-        
+    
     return SELECT
+    
 
 async def settings_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Sends prompt messages once a setting to change is selected."""
@@ -478,6 +573,9 @@ async def settings_update(update: Update, context: ContextTypes.DEFAULT_TYPE, se
     Update settings and prompts user to select another setting.
     """
     chat_id = update.effective_chat.id
+    target_chat_id = context.user_data["target_chat_id"]
+    del context.user_data["target_chat_id"]
+    print(context.user_data)
 
     # Connect to DB
     con = sqlite3.connect(f"{DB_FILEPATH}/rsnbusbot.db")
@@ -489,7 +587,7 @@ async def settings_update(update: Update, context: ContextTypes.DEFAULT_TYPE, se
 
     cur.execute(f"UPDATE settings SET \
                 {setting}={value} \
-                WHERE chat_id={chat_id}")
+                WHERE chat_id={target_chat_id}")
     con.commit()
 
     con.close()
@@ -521,7 +619,7 @@ async def settings_destination(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def settings_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Settings for chat type"""
-    chat_id = update.effective_chat.id
+    target_chat_id = context.user_data["target_chat_id"]
 
     await settings_update(update, context, "chat_type", update.message.text)
     
@@ -531,7 +629,7 @@ async def settings_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         con = sqlite3.connect(f"{DB_FILEPATH}/rsnbusbot.db")
         cur = con.cursor()
 
-        cur.execute(f"DELETE FROM buses WHERE chat_id={chat_id}")
+        cur.execute(f"DELETE FROM buses WHERE chat_id={target_chat_id}")
         con.commit()
 
         con.close()
@@ -541,13 +639,14 @@ async def settings_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def settings_buses(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Settings for bus timings"""
     chat_id = update.effective_chat.id
+    target_chat_id = context.user_data["target_chat_id"]
 
     # Connect to DB
     con = sqlite3.connect(f"{DB_FILEPATH}/rsnbusbot.db")
     cur = con.cursor()
 
     # Get data from database
-    res = cur.execute(f"SELECT time FROM buses WHERE chat_id = {chat_id}")
+    res = cur.execute(f"SELECT time FROM buses WHERE chat_id = {target_chat_id}")
     current_buses = res.fetchall()
     current_buses = list(map(lambda x: x[0], current_buses))
 
@@ -562,13 +661,13 @@ async def settings_buses(update: Update, context: ContextTypes.DEFAULT_TYPE):
     new_buses = list(set(buses) - set(current_buses))
     for bus in new_buses: # Add new buses
         cur.execute(f"INSERT INTO buses VALUES \
-                    ({bus_id + 1}, {chat_id}, '{bus}')")
+                    ({bus_id + 1}, {target_chat_id}, '{bus}')")
         con.commit()
         bus_id += 1
     old_buses = list(set(current_buses) - set(buses))
     for bus in old_buses: # Remove old buses
         cur.execute(f"DELETE FROM buses \
-                    WHERE chat_id = {chat_id} \
+                    WHERE chat_id = {target_chat_id} \
                     AND time = '{bus}'")
         con.commit()
 
@@ -586,6 +685,8 @@ async def settings_buses(update: Update, context: ContextTypes.DEFAULT_TYPE):
 settings_handler = ConversationHandler(
     entry_points=[CommandHandler("settings", settings_command)],
     states = {
+        CHAT_ID: [MessageHandler(filters.Regex(r"^[0-9]+$"), settings_chat_id),
+                  MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
         SELECT: [MessageHandler(filters.Regex(r"^(Max Riders|Pickup Location|Destination|Chat Type|Buses)$"), settings_select),
                  MessageHandler(filters.ALL & ~filters.COMMAND, invalid)],
         RIDERS: [MessageHandler(filters.Regex(r"^[0-9]+$"), settings_riders),
@@ -651,8 +752,11 @@ async def registration_message(context: ContextTypes.DEFAULT_TYPE,
 Registration of {pickup} to {destination} Shuttle Bus slots for {date} at {t}."
     
     if message_id:
+        bookings = chat_data["bookings"][message_id]['bookings']
         users = chat_data["bookings"][message_id]['users']
-        text = f"{text}\n\nPlaces Reserved:"
+
+        text = f"{text}\n\nPlaces Reserved ({bookings}):"
+
         for u in users:
             text += f"\n{u['username']}"
     
@@ -810,7 +914,7 @@ async def booking_cb_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
                                message_id = message_id
                                )
 
-BOOK_ID, FUNCTION = range(6, 8)
+BOOK_ID, FUNCTION = range(7, 9)
 
 @permissions_factory("admin")
 @restricted
@@ -1222,7 +1326,7 @@ view_schedule_handler = ConversationHandler(
     conversation_timeout = 60
 )
 
-BUS_ID, OVERWRITE, DATES = range(9, 12)
+BUS_ID, OVERWRITE, DATES = range(10, 13)
 
 @permissions_factory("admin")
 @restricted
@@ -1429,9 +1533,9 @@ async def daily_booking(context: ContextTypes.DEFAULT_TYPE):
                 if status == 0:
                     await book_job(context, chat_id, t)
                 else:
-                    await context.bot.send_message( # TODO: Error message says the bus time will not be running
+                    await context.bot.send_message(
                         chat_id = chat_id,
-                        text = f"Dear all, bus {bus_id} will not be running tomorrow." # OVERWRITE_FALSE_MSG
+                        text = f"Dear all, the bus at {t} will not be running tomorrow." # OVERWRITE_FALSE_MSG
                     )
 
                 flag = True
@@ -1564,7 +1668,7 @@ async def end_book_job(context: ContextTypes.DEFAULT_TYPE):
     con.close()
     
 ## BROADCAST / NOTIFICATION
-CONFIRM, SENT = range(12, 14) # States for broadcast conversation handler
+CONFIRM, SENT = range(13, 15) # States for broadcast conversation handler
 
 @permissions_factory("admin")
 @restricted

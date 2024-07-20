@@ -10,6 +10,7 @@ DEFAULT_MAX_RIDERS = 40
 START_MSG = """Welcome to RSN Bus Bot! Please send /start directly to the bot to enable receiving of tokens. \
 Use /settings to edit the default settings."""
 USER_START_MSG = """Welcome to RSN Bus Bot! Booking confirmation tokens can now be sent to you."""
+RESET_MSG = """Bot has been reset."""
 HELP_MSG = """Here are a list of currently available commands:
 /start - Introduce the bot; initialize daily registration.
 /view_settings - Shows a list of current bot settings.
@@ -81,7 +82,7 @@ INVALID_SCHEDULE_DATE_MSG = """Invalid schedule dates. Please try again."""
 BROADCAST_PROMPT_MSG = """Please type the message you wish to broadcast, or /cancel to cancel broadcast."""
 BROADCAST_CONFIRM_MSG = """Please confirm that this is the message you want to broadcast? (Yes/No)"""
 BROADCAST_SENT_MSG = """Message has been broadcasted!"""
-NOTIFY_LATE_MSG = """Dear all, the bus at 0700hrs will be late. Please inform your respective units of the delay and to seek their understanding. Thank you"""
+NOTIFY_LATE_MSG = """Dear all, the bus will be late. Please inform your respective units of the delay and to seek their understanding. Thank you"""
 
 EDIT_DB_MSG = """Please enter the command to execute:"""
 

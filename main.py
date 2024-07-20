@@ -1,5 +1,5 @@
 """
-RSNBusBot v1.2.1
+RSNBusBot v1.3.0
 """
 
 ### IMPORTS
@@ -82,6 +82,7 @@ async def process_update(request: Request):
 # Set up PTB handlers
 # Commands (General)
 ptb.add_handler(CommandHandler('start', start_command))
+ptb.add_handler(CommandHandler('reset', reset_command))
 ptb.add_handler(CommandHandler('view_settings', view_settings_command))
 ptb.add_handler(settings_handler)
 ptb.add_handler(CommandHandler('help', help_command))
@@ -120,7 +121,7 @@ ptb.job_queue.run_daily(daily_booking,
                         time=time(hour=17, minute=30, second=0, tzinfo=pytz.timezone(TIMEZONE)), 
                         days=(0, 1, 2, 3, 4, 5, 6)) # MUST be 0 to 6 to work
 ptb.job_queue.run_daily(end_book_job,
-                        time=time(hour=22, minute=0, second=0, tzinfo=pytz.timezone(TIMEZONE)),
+                        time=time(hour=23, minute=59, second=59, tzinfo=pytz.timezone(TIMEZONE)),
                         days=(0, 1, 2, 3, 4, 5, 6))
 
 # Polling, for dev purposes
